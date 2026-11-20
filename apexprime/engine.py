@@ -116,7 +116,7 @@ class ApexEngine:
             if not self.config.chart_img_api_key:
                 raise RuntimeError("CHART_IMG_API_KEY ausente; modo atual é Chart IMG")
             chart_client = ChartImgClient(self.config.chart_img_api_key, self.config.chart_img_api_base)
-            images = chart_client.get_five_charts(timezone_name)
+            images = chart_client.get_five_charts(timezone_name, symbol=self.config.chart_img_symbol)
             for item in images:
                 ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(
                     item["mime_type"], "png"
@@ -188,16 +188,33 @@ class ApexEngine:
             if settings.get("groq_alerts_enabled", True):
                 self.telegram.send("⚠️ APEXPRIME — Groq indisponível\n" + message[:1000])
 
-    def run_hourly(self) -> None:
+    def _runtime_settings(self) -> dict[str, Any]:
         settings = self.db.settings()
-        prompts = self.db.prompts()
         settings["max_entry_deviation_pct"] = self.config.max_entry_deviation_pct
         settings["pending_entry_expiry_hours"] = self.config.pending_entry_expiry_hours
-        symbol = settings.get("binance_symbol", "BTCUSDT")
-        # Process pending setups first, then manage any positions that were already open
-        # or have just been filled from a pending setup.
+        return settings
+
+    def run_maintenance(self) -> None:
+        """Monitor pending entries and open paper trades independently of Gemini scans."""
+        settings = self._runtime_settings()
         self.executor.monitor_pending_entries(settings)
         self.executor.monitor_open_trades(settings)
+
+    def run_device_health_check(self, device_snapshot: dict[str, Any]) -> None:
+        """Send server telemetry to Groq independently of whether a new 1H candle exists."""
+        settings = self._runtime_settings()
+        self._health_check_groq(settings, {"server_device": device_snapshot,
+                                           "market_provider": "BINANCE_USDM",
+                                           "mode": "PAPER_ONLY"})
+
+    def run_hourly(self, *, include_maintenance: bool = True, check_groq: bool = True) -> None:
+        settings = self._runtime_settings()
+        prompts = self.db.prompts()
+        symbol = settings.get("binance_symbol", "BTCUSDT")
+        # The Redmi daemon performs this every minute. Keep it enabled for manual/legacy CLI runs.
+        if include_maintenance:
+            self.executor.monitor_pending_entries(settings)
+            self.executor.monitor_open_trades(settings)
         candles = self.market.recent_closed_klines(symbol, "1h", 120)
         trigger_signal = detect_latest_trigger(candles)
         trigger = trigger_signal.to_dict()
@@ -215,10 +232,12 @@ class ApexEngine:
                 "error_message": trigger_signal.reason,
             })
             self.db.log("INFO", "strategy", trigger_signal.reason, run_id=run["id"], details=trigger)
-            self._health_check_groq(settings, snapshot, run["id"])
+            if check_groq:
+                self._health_check_groq(settings, snapshot, run["id"])
             return
         self._run_analysis(run=run, settings=settings, prompts=prompts,
-                           datasets=None, trigger=trigger, source="hourly_scan")
+                           datasets=None, trigger=trigger, source="hourly_scan",
+                           check_groq=check_groq)
 
     def run_manual_analysis(self) -> dict[str, Any]:
         settings = self.db.settings()
@@ -237,7 +256,8 @@ class ApexEngine:
 
     def _run_analysis(self, *, run: dict[str, Any], settings: dict[str, Any],
                       prompts: dict[str, Any], datasets: dict[str, list[Candle]] | None,
-                      trigger: dict[str, Any], source: str) -> dict[str, Any]:
+                      trigger: dict[str, Any], source: str,
+                      check_groq: bool = True) -> dict[str, Any]:
         symbol = settings.get("binance_symbol", "BTCUSDT")
         started = time.monotonic()
         try:
@@ -292,7 +312,8 @@ class ApexEngine:
             elif trade is None:
                 self.telegram.send("ℹ️ APEXPRIME — Análise concluída, mas nenhuma posição foi aberta.\n" +
                                    analysis.get("analysis_summary", "Verifique os logs do painel.")[:1200])
-            self._health_check_groq(settings, snapshot, run["id"])
+            if check_groq:
+                self._health_check_groq(settings, snapshot, run["id"])
             return {"run_id": run["id"], "analysis": analysis,
                     "trade_opened": bool(trade), "pending_entry_created": bool(pending_entry)}
         except Exception as exc:
@@ -409,9 +430,10 @@ class ApexEngine:
         if settings.get("analysis_mode") == "chart_img" and self.config.chart_img_api_key:
             def chart_test():
                 data, mime = ChartImgClient(self.config.chart_img_api_key,
-                                            self.config.chart_img_api_base).get_chart("1h",
-                                            timezone_name=settings.get("timezone", "America/Sao_Paulo"))
-                return {"mime_type": mime, "bytes": len(data)}
+                                            self.config.chart_img_api_base).get_chart(
+                    "1h", symbol=self.config.chart_img_symbol,
+                    timezone_name=settings.get("timezone", "America/Sao_Paulo"))
+                return {"mime_type": mime, "bytes": len(data), "symbol": self.config.chart_img_symbol}
             record("CHART_IMG", chart_test)
         else:
             results["CHART_IMG"] = {"status": "WARN", "message": "Chart IMG não selecionado ou sem chave"}

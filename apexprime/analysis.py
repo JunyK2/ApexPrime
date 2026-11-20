@@ -114,10 +114,10 @@ class ChartImgClient:
             raise RuntimeError("Chart IMG retornou uma imagem vazia/pequena demais")
         return response.content, mime
 
-    def get_five_charts(self, timezone_name: str) -> list[dict[str, Any]]:
+    def get_five_charts(self, timezone_name: str, symbol: str = "BINANCE:BTCUSDT.P") -> list[dict[str, Any]]:
         images: list[dict[str, Any]] = []
         for label, _market_interval in TIMEFRAMES:
-            data, mime = self.get_chart(CHART_INTERVALS[label], symbol="BINANCE:BTCUSDT",
+            data, mime = self.get_chart(CHART_INTERVALS[label], symbol=symbol,
                                         timezone_name=timezone_name)
             images.append({"timeframe": label, "data": data, "mime_type": mime})
         return images
@@ -196,9 +196,14 @@ class GroqHealthClient:
                 "max_tokens": 500,
                 "messages": [
                     {"role": "system", "content": (
-                        "Você é um verificador de integridade operacional do ApexPrime. "
-                        "Avalie apenas inconsistências técnicas nos dados recebidos; não recomende trades. "
-                        "Responda em JSON: {\"healthy\":true|false,\"severity\":\"INFO|WARN|CRITICAL\",\"issues\":[...],\"summary\":\"...\"}."
+                        "Você é o monitor de saúde operacional do ApexPrime e do servidor Android. "
+                        "Avalie conectividade com a Binance, Supabase, Gemini, fila e trades virtuais, "
+                        "além da bateria, temperatura da bateria, estado de carga, Wi-Fi, RSSI em dBm, "
+                        "uptime e heartbeat do Redmi 6A. Indique se a bateria está abaixo do limite de 40%, "
+                        "se o sinal Wi-Fi está fraco (RSSI abaixo de -75 dBm) e se o dispositivo parece offline. "
+                        "Não recomende trades e não invente medições ausentes. Responda em JSON: "
+                        "{\"healthy\":true|false,\"severity\":\"INFO|WARN|CRITICAL\","
+                        "\"issues\":[...],\"summary\":\"...\",\"device_summary\":\"...\"}."
                     )},
                     {"role": "user", "content": str(snapshot)[:12000]},
                 ],

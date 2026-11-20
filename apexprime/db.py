@@ -65,6 +65,13 @@ class SupabaseREST:
         result = self._request("POST", table, body=rows, prefer="return=representation")
         return result or []
 
+    def upsert(self, table: str, rows: dict[str, Any] | list[dict[str, Any]], *, on_conflict: str) -> list[dict[str, Any]]:
+        result = self._request(
+            "POST", table, params={"on_conflict": on_conflict}, body=rows,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        return result or []
+
     def update(self, table: str, filters: dict[str, str], values: dict[str, Any]) -> list[dict[str, Any]]:
         return self._request("PATCH", table, params=filters, body=values, prefer="return=representation") or []
 
