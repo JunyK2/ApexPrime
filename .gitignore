@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!config/.env.redmi6a.example
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -8,3 +9,7 @@ __pycache__/
 venv/
 .DS_Store
 *.log
+runtime/
+logs/
+*.sqlite3
+config/.env.redmi6a

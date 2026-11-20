@@ -1,7 +1,7 @@
 [project]
 name = "apexprime"
-version = "0.2.0"
-description = "ApexPrime paper-trading worker for BTCUSDT"
+version = "0.3.0"
+description = "ApexPrime Redmi 6A paper-trading daemon for BTCUSDT"
 requires-python = ">=3.11"
 dependencies = ["requests>=2.32,<3", "python-dotenv>=1.0,<2"]
 

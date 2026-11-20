@@ -1,29 +1,41 @@
-# ApexPrime — Parte 1/3
+# ApexPrime — Redmi 6A Edition
 
-Base de arquitetura, segurança, prompts iniciais e schema SQL do Supabase.
+Robô de **paper trading BTCUSDT USDⓈ-M Futures** executado localmente no Redmi 6A via Termux. O GitHub hospeda o código e o PWA; não executa o worker de mercado.
 
-> **Modo exclusivamente paper trading.** Esta base não contém integração com endpoints de criação de ordens da Binance. O módulo de execução será um simulador local no worker e persistirá os resultados no Supabase.
+## Cadência do servidor
 
-## Conteúdo
+- Heartbeat do Redmi: 60 segundos.
+- Gestão de trades virtuais e entradas pendentes: 60 segundos.
+- Telemetria de bateria/Wi-Fi: 5 minutos.
+- Fila de comandos PWA: 30 segundos.
+- Scan do mercado: 15 minutos, usando candles 1H fechados como fonte da estratégia.
+- Groq recebe o estado do Redmi e da operação: 15 minutos.
+- Gemini: somente quando houver um gatilho novo ou solicitação manual.
 
-- `supabase/migrations/001_initial_schema.sql`: banco completo inicial.
-- `docs/arquitetura.md`: desenho das camadas e decisões técnicas.
-- `docs/secrets.md`: nomes de GitHub Secrets e proteção de credenciais.
-- `prompts/default-chart-img.md`: prompt padrão para 5 imagens.
-- `prompts/default-text.md`: prompt padrão para candles tabulares.
-- `tradingview/SMC_Gemini_Trigger_Detector.txt`: Pine Script enviado para referência/portabilidade.
-- `config/.env.example`: nomes de variáveis (sem valores secretos).
+## Instalação
 
-## Ordem de instalação
+Siga `docs/REDMI6A-INSTALACAO-COMPLETA.md`. Execute a migration `003_redmi_device_monitoring.sql` depois das migrations 001 e 002.
 
-1. Crie um repositório GitHub público chamado `ApexPrime`.
-2. Copie o conteúdo desta pasta para a raiz do repositório.
-3. No Supabase SQL Editor, execute `supabase/migrations/001_initial_schema.sql`.
-4. Crie seu usuário em Supabase Auth e adicione o UUID dele à tabela `public.apex_admins` (passos em `docs/arquitetura.md`).
-5. Configure os GitHub Secrets conforme `docs/secrets.md`.
+## Segurança
 
-**Não publique arquivos `.env` reais, service-role keys, chaves de IA, Chart IMG ou tokens Telegram.**
+- Paper trading obrigatório nesta versão.
+- `APEX_REAL_TRADING_ENABLED=false`.
+- Não há envio de ordens reais; não adicione chaves privadas Binance nesta edição.
+- `.env` é local e ignorado pelo Git. Service Role nunca vai ao PWA.
+- Use um token Telegram novo: qualquer token divulgado anteriormente deve ser revogado.
 
-## O que ainda não está nesta primeira parte
+## Execução local
 
-O worker, a integração com Gemini/Chart IMG/Groq/Telegram, o simulador de posições e o frontend PWA serão entregues nas partes seguintes. O schema já prevê essas funcionalidades.
+```bash
+bash android/termux/install.sh
+# configure .env
+bash scripts/start-apexprime.sh
+```
+
+Ver status: `bash scripts/status-apexprime.sh`. Ver logs: `tail -f runtime/daemon.log` e `tail -f runtime/supervisor.log`.
+
+Guia detalhado: `docs/REDMI6A-INSTALACAO-COMPLETA.md`.
+
+## Escopo atual do PWA
+
+O PWA desta edição entrega login administrativo e monitoramento do Redmi 6A (bateria, Wi-Fi, temperatura, uptime, timeline online/offline e resumo Groq). Os controles completos do painel de trading previstos no projeto original ainda precisam de uma etapa própria de frontend; o worker de paper trading continua funcionando no Termux.
