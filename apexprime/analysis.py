@@ -139,8 +139,10 @@ class GeminiClient:
         for image in images or []:
             parts.append({"text": f"\nPRINT DO GRÁFICO — TIMEFRAME {image['timeframe']}"})
             parts.append({
-                "inline_data": {
-                    "mime_type": image["mime_type"],
+                # Gemini GenerateContent REST uses the protobuf JSON names
+                # (camelCase), not the snake_case names used by some SDKs.
+                "inlineData": {
+                    "mimeType": image["mime_type"],
                     "data": base64.b64encode(image["data"]).decode("ascii"),
                 }
             })

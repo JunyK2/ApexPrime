@@ -38,7 +38,7 @@ class ApexEngine:
 
     @staticmethod
     def _snapshot(datasets: dict[str, list[Candle]], mark: dict[str, Any],
-                  trigger: dict[str, Any]) -> dict[str, Any]:
+                  trigger: dict[str, Any], symbol: str = "BTCUSDT") -> dict[str, Any]:
         frames: dict[str, Any] = {}
         for timeframe, candles in datasets.items():
             if not candles:
@@ -53,7 +53,7 @@ class ApexEngine:
                 "low_sample": min(c.low for c in candles[-30:]),
                 "indicators": indicators(candles),
             }
-        return {"symbol": "BTCUSDT", "mark_price": mark.get("markPrice"),
+        return {"symbol": symbol, "mark_price": mark.get("markPrice"),
                 "last_funding_rate": mark.get("lastFundingRate"),
                 "next_funding_time": mark.get("nextFundingTime"),
                 "timeframes": frames, "trigger": trigger}
@@ -194,6 +194,29 @@ class ApexEngine:
         settings["pending_entry_expiry_hours"] = self.config.pending_entry_expiry_hours
         return settings
 
+    def _daily_loss_guard(self, settings: dict[str, Any]) -> tuple[bool, float, float]:
+        """Return daily ledger guard; excludes unrealized PnL on still-open positions."""
+        account = self.db.active_account()
+        timezone_name = settings.get("timezone", "America/Sao_Paulo")
+        try:
+            local_tz = ZoneInfo(timezone_name)
+        except Exception:
+            local_tz = ZoneInfo("America/Sao_Paulo")
+        now_local = datetime.now(local_tz)
+        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_utc = start_local.astimezone(timezone.utc).isoformat()
+        ledger = self.db.select("balance_ledger", {
+            "account_id": f"eq.{account['id']}",
+            "created_at": f"gte.{start_utc}",
+        }, limit=2000)
+        today_pnl = sum(
+            float(row.get("amount", 0) or 0) for row in ledger
+            if row.get("event_type") not in {"INITIAL_BALANCE", "RESET"}
+        )
+        max_loss_pct = float(settings.get("max_daily_loss_pct", 6.0))
+        loss_limit = float(account.get("initial_balance", 20)) * max_loss_pct / 100.0
+        return today_pnl <= -loss_limit, today_pnl, loss_limit
+
     def run_maintenance(self) -> None:
         """Monitor pending entries and open paper trades independently of Gemini scans."""
         settings = self._runtime_settings()
@@ -218,9 +241,26 @@ class ApexEngine:
         candles = self.market.recent_closed_klines(symbol, "1h", 120)
         trigger_signal = detect_latest_trigger(candles)
         trigger = trigger_signal.to_dict()
-        snapshot = {"trigger": trigger}
         if not candles:
             raise RuntimeError("A Binance não retornou candles 1H fechados")
+        try:
+            mark = self.market.mark_price(symbol)
+        except Exception:
+            mark = {}
+        snapshot = {
+            "symbol": symbol,
+            "mark_price": mark.get("markPrice"),
+            "last_funding_rate": mark.get("lastFundingRate"),
+            "next_funding_time": mark.get("nextFundingTime"),
+            "trigger": trigger,
+            "timeframes": {"1H": {
+                "last_closed_open_time": candles[-1].open_time.isoformat(),
+                "last_closed_close_time": candles[-1].close_time.isoformat(),
+                "open": candles[-1].open, "high": candles[-1].high,
+                "low": candles[-1].low, "close": candles[-1].close,
+                "volume": candles[-1].volume,
+            }},
+        }
         run = self._create_run(source="hourly_scan", settings=settings,
                                trigger=trigger, candle=candles[-1])
         if not run:
@@ -263,7 +303,7 @@ class ApexEngine:
         try:
             datasets = datasets or self._fetch_datasets(symbol)
             mark = self.market.mark_price(symbol)
-            snapshot = self._snapshot(datasets, mark, trigger)
+            snapshot = self._snapshot(datasets, mark, trigger, symbol=symbol)
             result = self._analyze(run=run, settings=settings, prompts=prompts,
                                    datasets=datasets, symbol=symbol, mark=mark, snapshot=snapshot)
             analysis = result["data"]
@@ -279,7 +319,16 @@ class ApexEngine:
                 # Automatic scans must agree with the Pine trigger. Manual actions deliberately
                 # bypass the trigger gate, but still obey model validation and risk limits.
                 expected_direction = trigger.get("direction") if source == "hourly_scan" else analysis["signal"]
-                if block_weekend:
+                daily_limit_hit, daily_pnl, daily_loss_limit = self._daily_loss_guard(settings)
+                if not bool(settings.get("auto_trading_enabled", True)):
+                    self.db.log("INFO", "execution", "Execução automática pausada nas configurações",
+                                run_id=run["id"])
+                    self.telegram.send("⏸️ APEXPRIME — SINAL IDENTIFICADO, MAS NOVAS ENTRADAS ESTÃO PAUSADAS.\nA análise foi registrada; nenhuma posição foi aberta. MODO: SIMULAÇÃO")
+                elif daily_limit_hit:
+                    self.db.log("WARN", "risk_guard", "Entrada bloqueada pelo limite de perda diária",
+                                run_id=run["id"], details={"today_pnl": daily_pnl, "loss_limit": daily_loss_limit})
+                    self.telegram.send(f"🛑 APEXPRIME — LIMITE DE PERDA DIÁRIA\nPnL do dia: {daily_pnl:.4f} USDT\nLimite: -{daily_loss_limit:.4f} USDT\nNovas entradas pausadas até o próximo dia. MODO: SIMULAÇÃO")
+                elif block_weekend:
                     self.db.log("INFO", "execution", "Entrada bloqueada: configuração evita trades no fim de semana",
                                 run_id=run["id"])
                 elif analysis.get("entry_type") == "IMEDIATA":
@@ -358,6 +407,24 @@ class ApexEngine:
                         "status": "completed", "result": {"closed_trades": count},
                         "finished_at": iso_utc(),
                     })
+                elif request_type == "close_trade":
+                    trade_id = str((item.get("payload") or {}).get("trade_id", ""))
+                    if not trade_id:
+                        raise ValueError("Comando close_trade sem payload.trade_id")
+                    closed = self.executor.close_trade_manual(trade_id, settings)
+                    self.db.update("run_requests", {"id": f"eq.{item['id']}"}, {
+                        "status": "completed", "result": {"closed": closed, "trade_id": trade_id},
+                        "finished_at": iso_utc(),
+                    })
+                elif request_type == "cancel_pending_entry":
+                    pending_id = str((item.get("payload") or {}).get("pending_id", ""))
+                    if not pending_id:
+                        raise ValueError("Comando cancel_pending_entry sem payload.pending_id")
+                    cancelled = self.executor.cancel_pending_entry_manual(pending_id)
+                    self.db.update("run_requests", {"id": f"eq.{item['id']}"}, {
+                        "status": "completed", "result": {"cancelled": cancelled, "pending_id": pending_id},
+                        "finished_at": iso_utc(),
+                    })
                 elif request_type == "run_tests":
                     result = self.run_service_tests()
                     self.db.update("run_requests", {"id": f"eq.{item['id']}"}, {
@@ -421,13 +488,13 @@ class ApexEngine:
             record("GEMINI", gemini_test)
         else:
             results["GEMINI"] = {"status": "WARN", "message": "GEMINI_API_KEY ausente"}
-        if settings.get("groq_enabled") and self.config.groq_api_key:
+        if self.config.groq_api_key:
             record("GROQ", lambda: GroqHealthClient(
                 self.config.groq_api_key, settings.get("groq_model", "openai/gpt-oss-120b"),
                 self.config.groq_api_base).check({"test": "health"}))
         else:
-            results["GROQ"] = {"status": "WARN", "message": "Groq desativado ou sem chave"}
-        if settings.get("analysis_mode") == "chart_img" and self.config.chart_img_api_key:
+            results["GROQ"] = {"status": "WARN", "message": "GROQ_API_KEY ausente"}
+        if self.config.chart_img_api_key:
             def chart_test():
                 data, mime = ChartImgClient(self.config.chart_img_api_key,
                                             self.config.chart_img_api_base).get_chart(
@@ -438,7 +505,12 @@ class ApexEngine:
         else:
             results["CHART_IMG"] = {"status": "WARN", "message": "Chart IMG não selecionado ou sem chave"}
         if self.config.telegram_bot_token and self.config.telegram_chat_id:
-            record("TELEGRAM", lambda: {"sent": self.telegram.send("✅ ApexPrime: teste de conexão Telegram concluído (paper trading).")})
+            def telegram_test():
+                sent = self.telegram.send("✅ ApexPrime: teste de conexão Telegram concluído (paper trading).")
+                if not sent:
+                    raise RuntimeError("Telegram não confirmou o envio da mensagem de teste")
+                return {"sent": True}
+            record("TELEGRAM", telegram_test)
         else:
             results["TELEGRAM"] = {"status": "WARN", "message": "Telegram sem configuração"}
         return results

@@ -599,6 +599,40 @@ class PaperExecutor:
                 self.db.log("ERROR", "execution", f"Falha ao monitorar trade: {exc}",
                             details={"trade_id": trade.get("id")})
 
+
+    def close_trade_manual(self, trade_id: str, settings: dict[str, Any]) -> bool:
+        """Close one named open paper trade at the latest mark price."""
+        rows = self.db.select("trades", {"id": f"eq.{trade_id}", "status": "eq.OPEN"}, limit=1)
+        if not rows:
+            return False
+        trade = rows[0]
+        mark = float(self.market.mark_price(trade["symbol"])["markPrice"])
+        account = self._account()
+        trade, account = self.charge_funding(trade, settings, account, mark)
+        self._close_all(trade, mark, "MANUAL", settings, account, "MANUAL_EXIT")
+        return True
+
+    def cancel_pending_entry_manual(self, pending_id: str) -> bool:
+        """Cancel one pending virtual entry; does not interact with an exchange."""
+        rows = self.db.update("pending_entries", {
+            "id": f"eq.{pending_id}", "status": "eq.PENDING",
+        }, {
+            "status": "CANCELLED",
+            "last_checked_at": iso_utc(),
+            "resolution_message": "Cancelado manualmente pelo painel",
+        })
+        if not rows:
+            return False
+        item = rows[0]
+        self.notify(
+            f"⛔ APEXPRIME — ENTRADA VIRTUAL CANCELADA\n"
+            f"{item.get('direction')} {item.get('symbol')} ({item.get('entry_type')})\n"
+            "Cancelamento solicitado pelo painel.\nMODO: SIMULAÇÃO"
+        )
+        self.db.log("INFO", "execution", "Entrada virtual pendente cancelada pelo painel",
+                    details={"pending_id": pending_id})
+        return True
+
     def close_manual(self, settings: dict[str, Any]) -> int:
         trades = self.db.select("trades", {"status": "eq.OPEN"})
         pending = self.db.select("pending_entries", {"status": "in.(PENDING,PROCESSING)"})

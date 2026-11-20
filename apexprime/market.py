@@ -115,7 +115,21 @@ class BinanceFutures:
         return all_rows
 
     def health(self) -> dict[str, Any]:
+        """Probe the same public Futures endpoints used by the trading engine.
+
+        Testing only /time can pass even when market-data routes are region-blocked;
+        this probe includes closed klines and mark price so the dashboard exposes that.
+        """
         start = time.monotonic()
         server = self._get("/fapi/v1/time")
+        candles = self.recent_closed_klines("BTCUSDT", "1h", 3)
+        mark = self.mark_price("BTCUSDT")
+        if not candles:
+            raise RuntimeError("Binance não retornou candles Futures 1H fechados")
         elapsed = int((time.monotonic() - start) * 1000)
-        return {"server_time": server.get("serverTime"), "latency_ms": elapsed}
+        return {
+            "server_time": server.get("serverTime"),
+            "closed_1h_candles": len(candles),
+            "mark_price": mark.get("markPrice"),
+            "latency_ms": elapsed,
+        }
