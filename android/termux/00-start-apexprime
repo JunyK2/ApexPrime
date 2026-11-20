@@ -1,0 +1,13 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Termux:Boot script. Open Termux:Boot once manually after installing it.
+termux-wake-lock >/dev/null 2>&1 || true
+sleep 20
+APEX_HOME="${APEX_HOME:-$HOME/ApexPrime}"
+if [ -d "$APEX_HOME" ] && [ -f "$APEX_HOME/.env" ]; then
+  cd "$APEX_HOME"
+  mkdir -p runtime logs
+  if [ ! -f runtime/supervisor.pid ] || ! kill -0 "$(cat runtime/supervisor.pid)" 2>/dev/null; then
+    nohup bash "$APEX_HOME/scripts/apexprime-supervisor.sh" >> "$APEX_HOME/runtime/supervisor.log" 2>&1 </dev/null &
+    echo $! > "$APEX_HOME/runtime/supervisor.pid"
+  fi
+fi
