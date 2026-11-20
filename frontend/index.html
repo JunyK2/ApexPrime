@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050608">
+  <meta name="description" content="ApexPrime — painel do servidor Redmi 6A e paper trading BTCUSDT">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+  <title>ApexPrime</title>
+</head>
+<body>
+  <div class="ambient"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><div class="brand-mark">A</div><div><strong>APEXPRIME</strong><small>LOCAL TRADING INTELLIGENCE</small></div></div>
+      <div class="top-actions"><span id="session-state" class="pill muted">Desconectado</span><button id="logout" class="ghost hidden">Sair</button></div>
+    </header>
+
+    <section id="login-panel" class="login-panel">
+      <div class="eyebrow">ACESSO PRIVADO</div>
+      <h1>Seu centro de operações.</h1>
+      <p>Entre com o usuário administrador criado no Supabase Authentication.</p>
+      <form id="login-form">
+        <label>E-mail<input id="email" type="email" autocomplete="username" required></label>
+        <label>Senha<input id="password" type="password" autocomplete="current-password" required></label>
+        <button class="primary" type="submit">Entrar no ApexPrime</button>
+        <div id="login-error" class="error-text"></div>
+      </form>
+    </section>
+
+    <section id="dashboard" class="hidden">
+      <div class="page-heading"><div><div class="eyebrow">PAINEL DO SERVIDOR</div><h1>Redmi 6A</h1><p>Monitoramento do dispositivo que mantém o ApexPrime ativo.</p></div><div class="heading-actions"><button id="enable-notifications" class="ghost">Ativar alertas</button><button id="refresh" class="refresh">↻ Atualizar</button></div></div>
+
+      <div id="battery-alert" class="alert hidden"><span>⚠</span><div><strong>Bateria abaixo de 40%</strong><small>Conecte o Redmi 6A ao carregador para evitar interrupções. O alerta do navegador depende de permissão.</small></div></div>
+
+      <div class="device-hero card">
+        <div class="device-title"><div class="device-icon">▣</div><div><strong id="device-name">Redmi 6A</strong><small id="device-model">Aguardando primeira telemetria</small></div><span id="online-badge" class="pill muted">Desconhecido</span></div>
+        <div class="device-grid">
+          <div class="metric battery-metric"><span>BATERIA</span><strong id="battery-value">—%</strong><small id="charging-value">Estado desconhecido</small><div class="battery-track"><i id="battery-bar"></i></div></div>
+          <div class="metric"><span>TEMPERATURA</span><strong id="temp-value">— °C</strong><small>Sensor da bateria</small></div>
+          <div class="metric"><span>WI-FI</span><strong id="wifi-name">—</strong><small id="wifi-detail">Sem dados</small></div>
+          <div class="metric"><span>SINAL</span><strong id="wifi-rssi">— dBm</strong><small id="wifi-speed">Velocidade —</small></div>
+          <div class="metric"><span>UPTIME</span><strong id="uptime-value">—</strong><small>Tempo desde a inicialização</small></div>
+          <div class="metric"><span>ÚLTIMO CONTATO</span><strong id="last-seen">—</strong><small id="last-seen-relative">Aguardando servidor</small></div>
+        </div>
+        <div class="device-footer"><span id="device-ip">IP local: —</span><span id="device-health">Estado do servidor: aguardando</span></div>
+      </div>
+
+      <div class="section-head"><div><div class="eyebrow">DISPONIBILIDADE</div><h2>Timeline do servidor</h2></div><span class="subtle">Últimas 24 horas</span></div>
+      <div class="card timeline-card"><div class="timeline-legend"><span><i class="dot online"></i> Online</span><span><i class="dot offline"></i> Offline estimado</span></div><div id="timeline" class="timeline"><div class="empty">Aguardando os primeiros heartbeats do Redmi.</div></div><div class="timeline-note">Intervalos offline são estimados pela ausência de heartbeats; o horário exato de uma queda de energia ou internet não pode ser conhecido enquanto o aparelho está sem conexão.</div></div>
+
+      <div class="section-head"><div><div class="eyebrow">RESUMO DE OPERAÇÃO</div><h2>Estado do ApexPrime</h2></div></div>
+      <div class="summary-grid">
+        <div class="card summary"><span>ÚLTIMO GROQ</span><strong id="groq-summary">Aguardando</strong><small id="groq-time">—</small></div>
+        <div class="card summary"><span>MODO</span><strong>Paper trading</strong><small>Ordens reais desativadas</small></div>
+        <div class="card summary"><span>SCAN</span><strong>A cada 15 min</strong><small>Estratégia em candle 1H fechado</small></div>
+      </div>
+      <div class="footnote">ApexPrime · Redmi local worker · Binance USDⓈ-M Futures · Dados do aparelho enviados ao Supabase.</div>
+    </section>
+  </main>
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
