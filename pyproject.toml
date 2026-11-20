@@ -1,0 +1,10 @@
+[project]
+name = "apexprime"
+version = "0.2.0"
+description = "ApexPrime paper-trading worker for BTCUSDT"
+requires-python = ">=3.11"
+dependencies = ["requests>=2.32,<3", "python-dotenv>=1.0,<2"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
