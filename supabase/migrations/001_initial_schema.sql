@@ -354,6 +354,6 @@ end $$;
 
 comment on table public.trades is 'Paper trades only. No real exchange orders are submitted by this schema.';
 comment on table public.balance_ledger is 'Append-only-style audit history for virtual balance movements.';
-comment on table public.run_requests is 'Authenticated PWA command queue consumed by the GitHub Actions worker.';
+comment on table public.run_requests is 'Authenticated PWA command queue consumed by the local Redmi 6A Termux worker.';
 comment on column public.apex_prompts.custom_chart_img_prompt is 'NULL means use the application default prompt.';
 comment on column public.apex_prompts.custom_text_prompt is 'NULL means use the application default prompt.';
