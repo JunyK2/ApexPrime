@@ -1,0 +1,137 @@
+//@version=6
+indicator("SMC Gemini Trigger Detector", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ==============================================================================
+// 1. INPUTS CONFIGURÁVEIS
+// ==============================================================================
+group_vol = "1. Explosão de Volume"
+vol_mult = input.float(1.5, title="Multiplicador de Volume", minval=1.0, step=0.1, group=group_vol)
+
+group_sweep = "2. Varredura de Liquidez (Sweep)"
+sweep_len = input.int(16, title="Período de Varredura (N candles)", minval=2, group=group_sweep)
+
+group_disp = "3. Deslocamento + FVG"
+disp_mult = input.float(1.5, title="Multiplicador do Corpo do Candle", minval=1.0, step=0.1, group=group_disp)
+disp_len = input.int(10, title="Período da Média do Corpo do Candle", minval=2, group=group_disp)
+
+group_trigger = "Regra de Disparo"
+cooldown = input.int(3, title="Cooldown (Candles entre sinais)", minval=1, group=group_trigger)
+
+// ==============================================================================
+// 2. CÁLCULO DOS 3 PILARES
+// ==============================================================================
+
+// --- PILAR 1: EXPLOSÃO DE VOLUME ---
+vol_sma = ta.sma(volume, 20)
+vol_explosion = volume >= (vol_mult * vol_sma)
+
+// --- PILAR 2: VARREDURA DE LIQUIDEZ (Sweep) ---
+lowest_prev = ta.lowest(low, sweep_len)[1]
+highest_prev = ta.highest(high, sweep_len)[1]
+
+bull_sweep = low < lowest_prev and close > lowest_prev
+bear_sweep = high > highest_prev and close < highest_prev
+is_sweep = bull_sweep or bear_sweep
+
+// --- PILAR 3: DESLOCAMENTO + FVG ---
+current_body = math.abs(close - open)
+avg_body = ta.sma(math.abs(close - open), disp_len)
+is_disp_body = current_body >= (disp_mult * avg_body)
+
+bull_fvg = low > high[2]
+bear_fvg = high < low[2]
+
+bull_disp = is_disp_body and bull_fvg
+bear_disp = is_disp_body and bear_fvg
+is_displacement = bull_disp or bear_disp
+
+// ==============================================================================
+// 3. LÓGICA DE DISPARO (CHAMADA DO GEMINI)
+// ==============================================================================
+bull_score = (vol_explosion ? 1 : 0) + (bull_sweep ? 1 : 0) + (bull_disp ? 1 : 0)
+bear_score = (vol_explosion ? 1 : 0) + (bear_sweep ? 1 : 0) + (bear_disp ? 1 : 0)
+
+bull_trigger = bull_score >= 2
+bear_trigger = bear_score >= 2
+
+var int last_bull_bar = -9999
+var int last_bear_bar = -9999
+var int total_calls = 0
+
+bull_signal = bull_trigger and barstate.isconfirmed and (bar_index - last_bull_bar > cooldown)
+bear_signal = bear_trigger and barstate.isconfirmed and (bar_index - last_bear_bar > cooldown)
+
+if bull_signal
+    last_bull_bar := bar_index
+    total_calls += 1
+
+if bear_signal
+    last_bear_bar := bar_index
+    total_calls += 1
+
+// ==============================================================================
+// 4. ELEMENTOS VISUAIS NO GRÁFICO
+// ==============================================================================
+barcolor(bull_signal ? color.new(color.green, 0) : bear_signal ? color.new(color.red, 0) : na)
+
+if bull_signal
+    label.new(
+         x=bar_index,
+         y=low,
+         text="🤖 GEMINI BUY",
+         style=label.style_label_up,
+         color=color.new(color.green, 10),
+         textcolor=color.white,
+         size=size.normal
+    )
+
+if bear_signal
+    label.new(
+         x=bar_index,
+         y=high,
+         text="🤖 GEMINI SELL",
+         style=label.style_label_down,
+         color=color.new(color.red, 10),
+         textcolor=color.white,
+         size=size.normal
+    )
+
+// Dashboard (Tabela no canto superior direito) — CORRIGIDO: bgcolor em vez de bg_color
+var table dashboard = table.new(
+     position=position.top_right,
+     columns=2,
+     rows=5,
+     bgcolor=color.new(color.black, 80),
+     frame_color=color.gray,
+     frame_width=1,
+     border_color=color.gray
+)
+
+if barstate.islast
+    // Cabeçalho
+    table.cell(dashboard, 0, 0, "STATUS DOS PILARES", text_color=color.yellow, text_size=size.small, text_halign=text.align_center, bgcolor=color.new(color.black, 50))
+    table.cell(dashboard, 1, 0, "REAL-TIME", text_color=color.yellow, text_size=size.small, text_halign=text.align_center, bgcolor=color.new(color.black, 50))
+
+    // Pilar 1
+    table.cell(dashboard, 0, 1, "1. Volume Explosivo", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dashboard, 1, 1, vol_explosion ? "✅ SIM" : "❌ NÃO", text_color=vol_explosion ? color.green : color.red, text_size=size.small, text_halign=text.align_center)
+
+    // Pilar 2
+    table.cell(dashboard, 0, 2, "2. Sweep de Liquidez", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dashboard, 1, 2, is_sweep ? "✅ SIM" : "❌ NÃO", text_color=is_sweep ? color.green : color.red, text_size=size.small, text_halign=text.align_center)
+
+    // Pilar 3
+    table.cell(dashboard, 0, 3, "3. Desloc. + FVG", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dashboard, 1, 3, is_displacement ? "✅ SIM" : "❌ NÃO", text_color=is_displacement ? color.green : color.red, text_size=size.small, text_halign=text.align_center)
+
+    // Sinal e Total
+    table.cell(dashboard, 0, 4, "SINAL ATUAL", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(color.gray, 80))
+    signal_text = bull_signal ? "🟢 COMPRA" : bear_signal ? "🔴 VENDA" : "⚪ AGUARDE"
+    signal_color = bull_signal ? color.green : bear_signal ? color.red : color.white
+    table.cell(dashboard, 1, 4, signal_text + "\n(Total: " + str.tostring(total_calls) + ")", text_color=signal_color, text_size=size.small, text_halign=text.align_center, bgcolor=color.new(color.gray, 80))
+
+// ==============================================================================
+// 5. CONDIÇÕES DE ALERTA
+// ==============================================================================
+alertcondition(bull_signal, title="Gatilho Gemini Alta", message="🤖 SMC Gemini Trigger: COMPRA de alta probabilidade detectada! Verifique os 3 pilares no gráfico.")
+alertcondition(bear_signal, title="Gatilho Gemini Baixa", message="🤖 SMC Gemini Trigger: VENDA de alta probabilidade detectada! Verifique os 3 pilares no gráfico.")
