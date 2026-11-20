@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#050608">
-  <meta name="description" content="ApexPrime — painel do servidor Redmi 6A e paper trading BTCUSDT">
+  <meta name="description" content="ApexPrime — paper trading BTCUSDT e monitoramento do servidor Redmi 6A">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon-192.png">
   <link rel="stylesheet" href="style.css">
@@ -14,7 +14,7 @@
   <div class="ambient"></div>
   <main class="shell">
     <header class="topbar">
-      <div class="brand"><div class="brand-mark">A</div><div><strong>APEXPRIME</strong><small>LOCAL TRADING INTELLIGENCE</small></div></div>
+      <a class="brand" href="#overview" aria-label="ApexPrime início"><div class="brand-mark">A</div><div><strong>APEXPRIME</strong><small>PAPER TRADING INTELLIGENCE</small></div></a>
       <div class="top-actions"><span id="session-state" class="pill muted">Desconectado</span><button id="logout" class="ghost hidden">Sair</button></div>
     </header>
 
@@ -26,40 +26,160 @@
         <label>E-mail<input id="email" type="email" autocomplete="username" required></label>
         <label>Senha<input id="password" type="password" autocomplete="current-password" required></label>
         <button class="primary" type="submit">Entrar no ApexPrime</button>
-        <div id="login-error" class="error-text"></div>
+        <div id="login-error" class="error-text" role="alert"></div>
       </form>
     </section>
 
     <section id="dashboard" class="hidden">
-      <div class="page-heading"><div><div class="eyebrow">PAINEL DO SERVIDOR</div><h1>Redmi 6A</h1><p>Monitoramento do dispositivo que mantém o ApexPrime ativo.</p></div><div class="heading-actions"><button id="enable-notifications" class="ghost">Ativar alertas</button><button id="refresh" class="refresh">↻ Atualizar</button></div></div>
+      <div class="page-heading">
+        <div><div class="eyebrow">BTCUSDT · USDⓈ-M FUTURES · SIMULAÇÃO</div><h1>Painel de operações</h1><p>O Redmi 6A executa o motor local; este painel acompanha e controla a simulação.</p></div>
+        <div class="heading-actions"><button id="enable-notifications" class="ghost">Ativar alertas</button><button id="refresh" class="refresh">↻ Atualizar</button></div>
+      </div>
 
-      <div id="battery-alert" class="alert hidden"><span>⚠</span><div><strong>Bateria abaixo de 40%</strong><small>Conecte o Redmi 6A ao carregador para evitar interrupções. O alerta do navegador depende de permissão.</small></div></div>
+      <nav class="tabs" aria-label="Seções do ApexPrime">
+        <button class="tab active" data-tab="overview">Visão geral</button>
+        <button class="tab" data-tab="trades">Operações</button>
+        <button class="tab" data-tab="history">Histórico</button>
+        <button class="tab" data-tab="analysis">Análises</button>
+        <button class="tab" data-tab="settings">Configurações</button>
+        <button class="tab" data-tab="tests">Testes</button>
+        <button class="tab" data-tab="logs">Logs</button>
+      </nav>
 
-      <div class="device-hero card">
-        <div class="device-title"><div class="device-icon">▣</div><div><strong id="device-name">Redmi 6A</strong><small id="device-model">Aguardando primeira telemetria</small></div><span id="online-badge" class="pill muted">Desconhecido</span></div>
-        <div class="device-grid">
-          <div class="metric battery-metric"><span>BATERIA</span><strong id="battery-value">—%</strong><small id="charging-value">Estado desconhecido</small><div class="battery-track"><i id="battery-bar"></i></div></div>
-          <div class="metric"><span>TEMPERATURA</span><strong id="temp-value">— °C</strong><small>Sensor da bateria</small></div>
-          <div class="metric"><span>WI-FI</span><strong id="wifi-name">—</strong><small id="wifi-detail">Sem dados</small></div>
-          <div class="metric"><span>SINAL</span><strong id="wifi-rssi">— dBm</strong><small id="wifi-speed">Velocidade —</small></div>
-          <div class="metric"><span>UPTIME</span><strong id="uptime-value">—</strong><small>Tempo desde a inicialização</small></div>
-          <div class="metric"><span>ÚLTIMO CONTATO</span><strong id="last-seen">—</strong><small id="last-seen-relative">Aguardando servidor</small></div>
+      <div id="toast" class="toast hidden" role="status"></div>
+
+      <section id="tab-overview" class="tab-panel">
+        <div class="card market-strip">
+          <div><span>BTCUSDT · MARK PRICE</span><strong id="market-price">— USDT</strong><small id="market-updated">Aguardando leitura do mercado</small></div>
+          <div class="market-meta"><span>ÚLTIMO GATILHO</span><strong id="market-trigger">—</strong><small id="market-trigger-time">Sem sinal registrado</small></div>
         </div>
-        <div class="device-footer"><span id="device-ip">IP local: —</span><span id="device-health">Estado do servidor: aguardando</span></div>
-      </div>
+        <div class="metric-grid four">
+          <article class="card stat-card"><span>SALDO VIRTUAL</span><strong id="balance-value">— USDT</strong><small id="balance-sub">Saldo inicial: —</small></article>
+          <article class="card stat-card"><span>PnL DE HOJE</span><strong id="today-pnl">— USDT</strong><small>Movimentações realizadas no dia</small></article>
+          <article class="card stat-card"><span>TAXA DE ACERTO</span><strong id="win-rate">—%</strong><small id="win-rate-sub">Sem operações encerradas</small></article>
+          <article class="card stat-card"><span>PNL NÃO REALIZADO</span><strong id="unrealized-pnl">— USDT</strong><small id="open-count">0 operações abertas</small></article>
+        </div>
 
-      <div class="section-head"><div><div class="eyebrow">DISPONIBILIDADE</div><h2>Timeline do servidor</h2></div><span class="subtle">Últimas 24 horas</span></div>
-      <div class="card timeline-card"><div class="timeline-legend"><span><i class="dot online"></i> Online</span><span><i class="dot offline"></i> Offline estimado</span></div><div id="timeline" class="timeline"><div class="empty">Aguardando os primeiros heartbeats do Redmi.</div></div><div class="timeline-note">Intervalos offline são estimados pela ausência de heartbeats; o horário exato de uma queda de energia ou internet não pode ser conhecido enquanto o aparelho está sem conexão.</div></div>
+        <div class="section-head"><div><div class="eyebrow">EXECUÇÃO</div><h2>Servidor Redmi 6A</h2></div><span id="online-badge" class="pill muted">Aguardando</span></div>
+        <div id="battery-alert" class="alert hidden"><span>⚠</span><div><strong>Bateria abaixo de 40%</strong><small>Conecte o Redmi 6A ao carregador para evitar interrupções.</small></div></div>
+        <div class="device-hero card">
+          <div class="device-title"><div class="device-icon">▣</div><div><strong id="device-name">Redmi 6A</strong><small id="device-model">Aguardando primeira telemetria</small></div><span id="worker-pill" class="pill muted">Worker —</span></div>
+          <div class="device-grid">
+            <div class="metric battery-metric"><span>BATERIA</span><strong id="battery-value-device">—%</strong><small id="charging-value">Estado desconhecido</small><div class="battery-track"><i id="battery-bar"></i></div></div>
+            <div class="metric"><span>TEMPERATURA</span><strong id="temp-value">— °C</strong><small>Sensor da bateria</small></div>
+            <div class="metric"><span>WI-FI</span><strong id="wifi-name">—</strong><small id="wifi-detail">Sem dados</small></div>
+            <div class="metric"><span>SINAL</span><strong id="wifi-rssi">— dBm</strong><small id="wifi-speed">Velocidade —</small></div>
+            <div class="metric"><span>UPTIME</span><strong id="uptime-value">—</strong><small>Tempo desde a inicialização</small></div>
+            <div class="metric"><span>ÚLTIMO CONTATO</span><strong id="last-seen">—</strong><small id="last-seen-relative">Aguardando servidor</small></div>
+          </div>
+          <div class="device-footer"><span id="device-ip">IP local: —</span><span id="device-health">Estado do servidor: aguardando</span></div>
+        </div>
 
-      <div class="section-head"><div><div class="eyebrow">RESUMO DE OPERAÇÃO</div><h2>Estado do ApexPrime</h2></div></div>
-      <div class="summary-grid">
-        <div class="card summary"><span>ÚLTIMO GROQ</span><strong id="groq-summary">Aguardando</strong><small id="groq-time">—</small></div>
-        <div class="card summary"><span>MODO</span><strong>Paper trading</strong><small>Ordens reais desativadas</small></div>
-        <div class="card summary"><span>SCAN</span><strong>A cada 15 min</strong><small>Estratégia em candle 1H fechado</small></div>
-      </div>
-      <div class="footnote">ApexPrime · Redmi local worker · Binance USDⓈ-M Futures · Dados do aparelho enviados ao Supabase.</div>
+        <div class="section-head"><div><div class="eyebrow">POSIÇÕES</div><h2>Operações abertas</h2></div><button class="text-button" data-open-tab="trades">Ver todas</button></div>
+        <div id="overview-positions" class="stack-list"><div class="empty">Carregando operações…</div></div>
+
+        <div class="section-head"><div><div class="eyebrow">SETUPS</div><h2>Entradas pendentes</h2></div></div>
+        <div id="overview-pending" class="stack-list"><div class="empty">Nenhuma entrada pendente.</div></div>
+
+        <div class="section-head"><div><div class="eyebrow">DISPONIBILIDADE</div><h2>Timeline do servidor</h2></div><span class="subtle">Últimas 24 horas · estimativa</span></div>
+        <div class="card timeline-card"><div class="timeline-legend"><span><i class="dot online"></i> Online</span><span><i class="dot offline"></i> Offline estimado</span></div><div id="timeline" class="timeline"><div class="empty">Aguardando os primeiros heartbeats do Redmi.</div></div><div class="timeline-note">Intervalos offline são estimados pela ausência de heartbeats; o instante exato da interrupção não pode ser conhecido enquanto o aparelho está desconectado.</div></div>
+
+        <div class="summary-grid four">
+          <article class="card summary"><span>RESUMO GROQ</span><strong id="groq-summary">Aguardando</strong><small id="groq-time">—</small></article>
+          <article class="card summary"><span>MODO DE ANÁLISE</span><strong id="analysis-mode-label">Chart IMG</strong><small id="strategy-scan-label">Scan a cada 15 min · candle 1H</small></article>
+          <article class="card summary"><span>AUTOMAÇÃO</span><strong id="auto-trading-label">Ativa</strong><small id="daily-guard-label">Proteção diária: 6%</small></article>
+          <article class="card summary"><span>GEMINI</span><strong id="gemini-count-overview">—</strong><small>Requisições hoje</small></article>
+        </div>
+      </section>
+
+      <section id="tab-trades" class="tab-panel hidden">
+        <div class="section-head"><div><div class="eyebrow">PAPER TRADING</div><h2>Posições abertas</h2></div><button id="close-all" class="danger-button">Fechar todas</button></div>
+        <p class="section-note">O fechamento é simulado ao mark price consultado no momento em que o Redmi processar o comando.</p>
+        <div id="all-positions" class="stack-list"><div class="empty">Nenhuma operação aberta.</div></div>
+        <div class="section-head"><div><div class="eyebrow">AGUARDANDO PREÇO</div><h2>Entradas pendentes</h2></div></div>
+        <div id="all-pending" class="stack-list"><div class="empty">Nenhuma entrada pendente.</div></div>
+      </section>
+
+      <section id="tab-history" class="tab-panel hidden">
+        <div class="section-head"><div><div class="eyebrow">REGISTRO</div><h2>Histórico de operações</h2></div><span class="subtle">Últimas 100 operações</span></div>
+        <div id="trade-history" class="stack-list"><div class="empty">Ainda não há operações encerradas.</div></div>
+        <div class="section-head"><div><div class="eyebrow">REPLAY</div><h2>Reprodução de eventos</h2></div></div>
+        <div id="replay-panel" class="card replay-panel"><div class="empty">Selecione “Replay” em uma operação do histórico.</div></div>
+      </section>
+
+      <section id="tab-analysis" class="tab-panel hidden">
+        <div class="section-head"><div><div class="eyebrow">INTELIGÊNCIA</div><h2>Análises Gemini</h2></div><button id="force-analysis" class="primary small">Forçar análise Gemini</button></div>
+        <div class="metric-grid three">
+          <article class="card stat-card"><span>REQUISIÇÕES HOJE</span><strong id="gemini-today">—</strong><small>Contagem desde meia-noite local</small></article>
+          <article class="card stat-card"><span>TOTAL RECENTE</span><strong id="gemini-total">—</strong><small>Registros totais</small></article>
+          <article class="card stat-card"><span>ÚLTIMO MODELO</span><strong id="gemini-model-latest">—</strong><small id="gemini-last-time">—</small></article>
+        </div>
+        <div class="section-head"><div><div class="eyebrow">EXECUÇÕES</div><h2>Últimas análises</h2></div></div>
+        <div id="analysis-history" class="stack-list"><div class="empty">Nenhuma análise registrada.</div></div>
+        <div class="section-head"><div><div class="eyebrow">COMANDOS</div><h2>Fila recente</h2></div></div>
+        <div id="command-history" class="table-wrap"></div>
+      </section>
+
+      <section id="tab-settings" class="tab-panel hidden">
+        <div class="section-head"><div><div class="eyebrow">PERSONALIZAÇÃO</div><h2>Configurações do robô</h2></div></div>
+        <form id="settings-form" class="card form-card">
+          <div class="form-grid">
+            <label>Modo de análise<select id="setting-analysis-mode"><option value="chart_img">Chart IMG (imagens)</option><option value="text">Gráfico em texto</option></select></label>
+            <label>Par de mercado<input id="setting-symbol" maxlength="20" required></label>
+            <label>Risco por operação (%)<input id="setting-risk" type="number" min="0.1" max="2" step="0.1" required></label>
+            <label>Alavancagem máxima<input id="setting-leverage" type="number" min="1" max="20" step="1" required></label>
+            <label>Máximo de posições simultâneas<input id="setting-max-open" type="number" min="1" max="5" step="1" required></label>
+            <label>Taxa maker (%)<input id="setting-maker" type="number" min="0" max="1.99" step="0.001" required></label>
+            <label>Taxa taker (%)<input id="setting-taker" type="number" min="0" max="1.99" step="0.001" required></label>
+            <label>Limite diário de perda contabilizada (%)<input id="setting-daily-loss" type="number" min="0.5" max="20" step="0.5" required></label>
+            <label>Modelo Gemini<input id="setting-gemini-model" maxlength="100" required></label>
+            <label>Modelo Groq<input id="setting-groq-model" maxlength="100" required></label>
+            <label>Fuso horário<input id="setting-timezone" maxlength="80" required></label>
+          </div>
+          <div class="toggle-grid">
+            <label class="toggle"><input id="setting-auto-trading" type="checkbox"><span>Permitir novas entradas automáticas (inclui análise forçada)</span></label>
+            <label class="toggle"><input id="setting-weekends" type="checkbox"><span>Evitar trades nos finais de semana</span></label>
+            <label class="toggle"><input id="setting-groq" type="checkbox"><span>Ativar verificação Groq</span></label>
+            <label class="toggle"><input id="setting-groq-alerts" type="checkbox"><span>Alertas Groq no Telegram</span></label>
+            <label class="toggle"><input id="setting-funding" type="checkbox"><span>Calcular funding</span></label>
+          </div>
+          <button class="primary" type="submit">Salvar configurações</button>
+          <div id="settings-message" class="form-message" role="status"></div>
+          <p class="form-help">Tudo nesta edição é simulado. Pausar novas entradas não fecha posições existentes; o Redmi continua monitorando stops e alvos. Risco máximo 2% por operação, alavancagem simulada máxima 20x e limite de perda contabilizada configurável. A proteção considera resultados, taxas e funding já lançados no ledger; não inclui PnL flutuante de posições abertas.</p>
+        </form>
+
+        <div class="section-head"><div><div class="eyebrow">GEMINI</div><h2>Prompts de análise</h2></div></div>
+        <form id="prompts-form" class="card form-card">
+          <label>Prompt personalizado — Chart IMG<textarea id="prompt-chart" rows="10" placeholder="Vazio = usar prompt padrão Chart IMG"></textarea></label>
+          <label>Prompt personalizado — Gráfico em Texto<textarea id="prompt-text" rows="10" placeholder="Vazio = usar prompt padrão para candles em texto"></textarea></label>
+          <div class="form-row"><button class="primary" type="submit">Salvar prompts</button><button id="reset-prompts" class="ghost" type="button">Restaurar prompts padrão</button></div>
+          <div id="prompts-message" class="form-message" role="status"></div>
+          <p class="form-help">Ao restaurar, os campos personalizados ficam NULL no Supabase e o motor volta a usar os arquivos padrão incluídos no projeto.</p>
+        </form>
+      </section>
+
+      <section id="tab-tests" class="tab-panel hidden">
+        <div class="section-head"><div><div class="eyebrow">DIAGNÓSTICO</div><h2>Testes de serviços</h2></div><button id="run-tests" class="primary small">Executar testes</button></div>
+        <p class="section-note">Os testes são executados pelo Redmi. Alguns enviam uma requisição aos provedores e o teste do Telegram envia uma mensagem ao canal.</p>
+        <div id="service-tests" class="stack-list"><div class="empty">Aguardando testes.</div></div>
+        <div class="section-head"><div><div class="eyebrow">WORKER</div><h2>Comandos recentes</h2></div></div>
+        <div id="test-commands" class="table-wrap"></div>
+      </section>
+
+      <section id="tab-logs" class="tab-panel hidden">
+        <div class="section-head"><div><div class="eyebrow">AUDITORIA</div><h2>Logs do sistema</h2></div><select id="log-filter" class="compact-select"><option value="ALL">Todos os níveis</option><option value="ERROR">Erros</option><option value="WARN">Avisos</option><option value="INFO">Informações</option></select></div>
+        <div id="logs-list" class="table-wrap"><div class="empty">Nenhum log carregado.</div></div>
+      </section>
+
+      <footer class="footnote">ApexPrime · Redmi 6A local worker · Binance USDⓈ-M public market data · Paper trading only. Não envia ordens reais.</footer>
     </section>
   </main>
+
+  <div id="detail-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card"><div class="modal-head"><h2 id="modal-title">Detalhes</h2><button class="ghost" data-close-modal>Fechar</button></div><div id="modal-content" class="modal-content"></div></div>
+  </div>
+
   <script src="config.js"></script>
   <script type="module" src="app.js"></script>
 </body>
