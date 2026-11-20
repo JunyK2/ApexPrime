@@ -52,13 +52,16 @@ Execute:
 bash android/termux/install.sh
 ```
 
-## 3. Aplicar migration 003
+## 3. Aplicar migrations
 
-No Supabase Dashboard > SQL Editor > New Query, abra e execute uma vez:
+Para instalação limpa, execute 001, 002 e 003 na ordem. Para quem já configurou a edição anterior (como a instalação em andamento), não repita 001–003; execute apenas:
 
-`supabase/migrations/003_redmi_device_monitoring.sql`
+- `supabase/migrations/004_dashboard_individual_actions.sql`
+- `supabase/migrations/005_automation_risk_controls.sql`
 
-Não execute novamente migrations 001 e 002 se já foram aplicadas.
+Essas duas migrations completam os comandos individuais do PWA, a pausa de novas entradas e o limite de perda diária.
+
+Para atualizar o PWA/worker depois de instalado, siga também `docs/FINALIZACAO-PAPER-TRADING.md`.
 
 ## 4. Configurar segredos locais
 

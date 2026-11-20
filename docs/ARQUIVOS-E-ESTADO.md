@@ -1,28 +1,45 @@
-# Estado da entrega — Edição Redmi 6A
+# ApexPrime v1.0 — estado final do projeto
 
-Esta versão incorpora as partes anteriores e altera o ambiente de execução: o worker de trading deixa de rodar nos GitHub Actions e passa a rodar localmente no Redmi 6A via Termux.
+Esta distribuição incorpora as partes anteriores e finaliza o PWA administrativo para o worker Redmi 6A.
 
 ## Banco de dados
 
-- `001_initial_schema.sql`: schema original. Já executado pelo usuário; não executar novamente.
-- `002_pending_entries.sql`: entradas virtuais PULLBACK/CONFIRMACAO e cursor independente de candles 1m. Já executado pelo usuário; não executar novamente.
-- `003_redmi_device_monitoring.sql`: tabelas `apex_devices`, `device_heartbeats` e `device_events`. Executar uma vez para esta edição.
+- `001_initial_schema.sql`: schema, configurações, prompts, conta virtual, trades, ledger, runs, Gemini, logs e fila.
+- `002_pending_entries.sql`: entradas virtuais PULLBACK/CONFIRMACAO e cursor independente de candles 1m.
+- `003_redmi_device_monitoring.sql`: `apex_devices`, `device_heartbeats` e `device_events`.
+- `004_dashboard_individual_actions.sql`: habilita saída individual e cancelamento individual na fila.
+- `005_automation_risk_controls.sql`: pausa de entradas e limite de perda diária.
 
-## Funcionalidades desta edição
+Quem já executou 001–003 deve executar apenas 004 e 005.
 
-- Worker local Python no Termux; scan BTCUSDT a cada 15 minutos com sinal baseado em candle 1H fechado.
-- Chart IMG alinhado ao contrato perpétuo Binance (`BINANCE:BTCUSDT.P`).
-- Heartbeat a cada 60 segundos, telemetria de bateria/Wi-Fi a cada 5 minutos e timeline estimada.
-- Alertas Telegram de bateria abaixo de 40%, rearmados em 45%.
-- Groq recebe telemetria de saúde do Redmi e produz resumo operacional a cada 15 minutos.
-- Supervisor local e Termux:Boot para recuperação após reinício/encerramento do worker.
-- PWA de monitoramento em GitHub Pages; Actions fica restrito a CI e deploy estático.
+## Worker Redmi
 
-## Verificações
+- Heartbeat 60s; telemetria 5min; gestão trades/pendências 60s; fila 30s; scan mercado 15min; Groq 15min.
+- Detector TradingView usa candle 1H fechado e os três pilares do Pine.
+- Gemini Chart IMG (1D/4H/1H/15M/5M) ou candles em texto.
+- APEX_TABLE validada antes de afetar o saldo virtual.
+- PaperExecutor, sem endpoints privados de conta ou ordens Binance.
+- Limite risco 2%, alavancagem simulada 20x, TP1 parcial, breakeven, TP2, funding e taxas simuladas.
+- Entradas pendentes expiram e podem ser canceladas pelo painel.
+- Limite diário bloqueia novas entradas.
 
-- Compilação Python dos módulos.
-- Testes do detector, parser APEX_TABLE, risco e simulação, monitor de candles, armazenamento e Telegram.
-- Testes adicionais de parsing de telemetria Android.
-- Total no ambiente de desenvolvimento: 19 testes aprovados.
+## PWA final
 
-Os testes não validam credenciais, conectividade real do Redmi, permissões MIUI/Termux, nem disponibilidade dos provedores. O primeiro boot automático e a recuperação de rede devem ser testados no aparelho real.
+- Dashboard com saldo, PnL, win rate, preço BTCUSDT e último gatilho.
+- Saúde Redmi, bateria, carregamento, temperatura, Wi-Fi, RSSI, uptime, timeline.
+- Posições abertas, saída individual, fechar todas, entradas pendentes e cancelamento.
+- Histórico de trades, eventos, detalhes e replay em intervalos de aproximadamente 3 segundos.
+- Análises Gemini, APEX_TABLE, imagens armazenadas, contadores e fila de comandos.
+- Configurações de modo, prompts, risco, alavancagem, taxas, fim de semana, Groq, funding, pausa e perda diária.
+- Testes dos provedores e logs filtráveis.
+
+## Segurança e limites
+
+- Exclusivamente paper trading; `PAPER_TRADING_ONLY=true`; `APEX_REAL_TRADING_ENABLED=false`.
+- O código bloqueia a inicialização se a configuração tentar ativar modo real.
+- O PWA usa apenas Supabase URL e anon/public key; o service role fica no Termux.
+- A simulação não garante fills reais nem rentabilidade.
+
+## Testes no ambiente de desenvolvimento
+
+Total: **30 testes aprovados**. CI verifica Python e sintaxe JS. Testes de provedores/credenciais, conectividade e inicialização MIUI precisam continuar sendo executados no próprio Redmi pelo menu Testes.
