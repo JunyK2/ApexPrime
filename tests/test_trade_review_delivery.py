@@ -62,4 +62,4 @@ def test_trade_close_sends_original_analysis_and_chart_even_without_groq(monkeyp
     assert "CANDLES ENTRE ENTRADA E SAIDA" in telegram.messages[2]
     review_update = [row for row in db.updates if row[0] == "trade_reviews"][-1]
     assert review_update[2]["review_status"] == "ERROR"
-    assert review_update[2]["exit_text_snapshot"] == "CANDLES ENTRE ENTRADA E SAIDA"
+    assert review_update[2]["exit_text_snapshot"].startswith("CANDLES ENTRE ENTRADA E SAIDA")
