@@ -1,4 +1,4 @@
-const CACHE = 'apexprime-pwa-v6';
+const CACHE = 'apexprime-pwa-v8';
 const ASSETS = ['./','./index.html','./style.css','./app.js','./manifest.webmanifest','./config.js','./prompts/default-chart-img.md','./prompts/default-text.md','./icon-192.png','./icon-512.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting()));

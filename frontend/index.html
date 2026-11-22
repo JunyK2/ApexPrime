@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#050608">
+  <meta name="theme-color" content="#000000">
   <meta name="description" content="ApexPrime — paper trading BTCUSDT e monitoramento do servidor Redmi 6A">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon-192.png">
@@ -15,7 +15,7 @@
   <main class="shell">
     <header class="topbar">
       <a class="brand" href="#overview" aria-label="ApexPrime início"><div class="brand-mark">A</div><div><strong>APEXPRIME</strong><small>PAPER TRADING INTELLIGENCE</small></div></a>
-      <div class="top-actions"><span id="session-state" class="pill muted">Desconectado</span><button id="logout" class="ghost hidden">Sair</button></div>
+      <div class="top-actions"><span id="session-state" class="pill muted" title="Desconectado">Desconectado</span><button id="logout" class="ghost hidden">Sair</button></div>
     </header>
 
     <section id="login-panel" class="login-panel">
@@ -43,6 +43,7 @@
         <button class="tab" data-tab="analysis">Análises</button>
         <button class="tab" data-tab="settings">Configurações</button>
         <button class="tab" data-tab="tests">Testes</button>
+        <button class="tab" data-tab="device-signal">Sinal do aparelho</button>
         <button class="tab" data-tab="logs">Logs</button>
       </nav>
 
@@ -53,6 +54,19 @@
           <div><span>BTCUSDT · MARK PRICE</span><strong id="market-price">— USDT</strong><small id="market-updated">Aguardando leitura do mercado</small></div>
           <div class="market-meta"><span>ÚLTIMO GATILHO</span><strong id="market-trigger">—</strong><small id="market-trigger-time">Sem sinal registrado</small></div>
         </div>
+        <div class="section-head"><div><div class="eyebrow">GRÁFICO DE MERCADO</div><h2>BTCUSDT · TradingView</h2></div><span class="pill muted">BINANCE FUTURES</span></div>
+        <article class="card tv-card">
+          <div class="tv-toolbar" role="group" aria-label="Timeframe TradingView">
+            <button class="tv-timeframe active" data-tv-interval="60">1H</button>
+            <button class="tv-timeframe" data-tv-interval="5">5M</button>
+            <button class="tv-timeframe" data-tv-interval="15">15M</button>
+            <button class="tv-timeframe" data-tv-interval="240">4H</button>
+            <button class="tv-timeframe" data-tv-interval="1D">1D</button>
+          </div>
+          <div id="tradingview-widget" class="tv-widget-host"><div class="empty">Carregando gráfico TradingView…</div></div>
+          <small class="subtle">Widget externo da TradingView. Os preços e candles são fornecidos pela TradingView; o motor ApexPrime usa a API pública Binance Futures.</small>
+        </article>
+
         <div class="metric-grid four">
           <article class="card stat-card"><span>SALDO VIRTUAL</span><strong id="balance-value">— USDT</strong><small id="balance-sub">Saldo inicial: —</small></article>
           <article class="card stat-card"><span>PnL DE HOJE</span><strong id="today-pnl">— USDT</strong><small>Movimentações realizadas no dia</small></article>
@@ -93,7 +107,8 @@
         <div class="summary-grid four">
           <article class="card summary"><span>RESUMO GROQ</span><strong id="groq-summary">Aguardando</strong><small id="groq-time">—</small><button id="groq-report-now" class="ghost small">Relatório Groq completo</button></article>
           <article class="card summary"><span>MODO DE ANÁLISE</span><strong id="analysis-mode-label">Chart IMG</strong><small id="strategy-scan-label">Scan a cada 15 min · candle 1H</small></article>
-          <article class="card summary"><span>AUTOMAÇÃO</span><strong id="auto-trading-label">Ativa</strong><small id="daily-guard-label">Proteção diária: 6%</small></article>
+          <article class="card summary"><span>EXECUÇÃO AUTOMÁTICA</span><strong id="auto-trading-label">Ativa</strong><small id="daily-guard-label">Proteção diária: 6%</small></article>
+          <article class="card summary"><span>ANÁLISE AUTOMÁTICA POR IA</span><strong id="ai-auto-label">Ligada</strong><small>Desligada: detecta oportunidades e mantém Telegram/Groq sem enviar gráficos às IAs.</small><button id="toggle-ai-auto" class="ghost small" type="button">Desligar IA automática</button></article>
           <article class="card summary"><span>GEMINI</span><strong id="gemini-count-overview">—</strong><small>Requisições hoje</small></article>
         </div>
       </section>
@@ -151,10 +166,12 @@
             <label>Modelo Gemini<input id="setting-gemini-model" maxlength="100" required></label>
             <label>Modelo Groq<input id="setting-groq-model" maxlength="100" required></label>
             <label>Fuso horário<input id="setting-timezone" maxlength="80" required></label>
-            <label>Estratégia de provedores<select id="setting-ai-strategy"><option value="auto">Automática · Gemini → OpenRouter → Groq</option><option value="fixed">Provedor/modelo fixo</option></select></label>
-            <label>Provedor fixo<select id="setting-fixed-provider"><option value="gemini">Gemini</option><option value="openrouter">OpenRouter</option><option value="groq">Groq</option></select></label>
+            <label>Estratégia de provedores<select id="setting-ai-strategy"><option value="auto">Automática · Gemini → OpenRouter</option><option value="fixed">Provedor/modelo fixo</option></select></label>
+            <label>Provedor fixo<select id="setting-fixed-provider"><option value="gemini">Gemini</option><option value="openrouter">OpenRouter</option></select></label>
             <label>Modelo fixo<input id="setting-fixed-model" maxlength="140" placeholder="Ex.: gemini-4-hydrogen"></label>
             <label>Modelo OpenRouter<input id="setting-openrouter-model" maxlength="140" placeholder="openrouter/free"></label>
+            <label>Perfil de prompt<select id="setting-prompt-profile"><option value="standard">Original / institucional</option><option value="momentum_protection">Momentum + Proteção (experimental)</option></select></label>
+            <label>Buffer extra do stop protetor (bps)<input id="setting-profit-stop-buffer" type="number" min="0" max="100" step="1"></label>
             <label>Verificação Groq a cada (horas)<input id="setting-groq-interval" type="number" min="1" max="48" step="1"></label>
             <label>Notional mínimo simulado (USDT)<input id="setting-min-notional" type="number" min="1" max="100000" step="1"></label>
             <label>Volume · multiplicador<input id="setting-volume-mult" type="number" min="1" max="5" step="0.1"></label>
@@ -164,6 +181,7 @@
             <label>Pontuação mínima do gatilho<select id="setting-min-score"><option value="1">1 de 3 · Sensibilidade alta</option><option value="2">2 de 3 · Padrão</option><option value="3">3 de 3 · Sensibilidade baixa</option></select></label>
           </div>
           <div class="toggle-grid">
+            <label class="toggle"><input id="setting-ai-auto-analysis" type="checkbox"><span>Enviar oportunidades automaticamente para Gemini/OpenRouter (ON/OFF)</span></label>
             <label class="toggle"><input id="setting-auto-trading" type="checkbox"><span>Permitir novas entradas automáticas (inclui análise forçada)</span></label>
             <label class="toggle"><input id="setting-weekends" type="checkbox"><span>Evitar trades nos finais de semana</span></label>
             <label class="toggle"><input id="setting-groq" type="checkbox"><span>Ativar verificação Groq</span></label>
@@ -204,6 +222,29 @@
         </article>
         <div class="section-head"><div><div class="eyebrow">WORKER</div><h2>Comandos recentes</h2></div></div>
         <div id="test-commands" class="table-wrap"></div>
+      </section>
+
+      <section id="tab-device-signal" class="tab-panel hidden">
+        <div class="section-head"><div><div class="eyebrow">FUNÇÃO INDEPENDENTE</div><h2>Sinal sonoro do Redmi 6A</h2></div><span id="signal-lock-badge" class="pill bad">TRAVADO</span></div>
+        <article class="card form-card signal-card">
+          <p class="form-help">Módulo separado do trading. Não envia mensagens ao Telegram, não altera operações e só funciona quando destravado. Gera onda quadrada de 440 Hz pela saída de áudio do Android.</p>
+          <div class="form-grid signal-unlock-grid">
+            <label>Senha para destravar<input id="signal-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="Digite a senha" /></label>
+            <div class="form-row signal-lock-actions"><button id="signal-unlock" class="primary" type="button">Destravar função</button><button id="signal-lock" class="ghost" type="button">🔒 Travar</button></div>
+          </div>
+          <div class="form-row signal-actions">
+            <button id="signal-beep" class="primary" type="button" disabled>Enviar Sinal · 2 segundos</button>
+            <button id="signal-continuous-on" class="ghost" type="button" disabled>Som contínuo ON</button>
+            <button id="signal-continuous-off" class="danger-button" type="button">Som contínuo OFF</button>
+          </div>
+          <div class="section-head"><div><div class="eyebrow">AGENDAMENTO</div><h3>Agendar sinal sonoro</h3></div></div>
+          <label>Data e hora<input id="signal-schedule-at" type="datetime-local" /></label>
+          <button id="signal-schedule" class="ghost" type="button" disabled>Agendar sinal</button>
+          <div id="signal-status" class="form-message" role="status">Aguardando estado do módulo no Redmi.</div>
+          <p class="form-help warning-text">A saída usa o volume de mídia máximo configurado pelo Android. Teste primeiro com o fone fora dos ouvidos e em ambiente seguro. O modo contínuo permanece tocando até você desligá-lo ou travar a função.</p>
+        </article>
+        <div class="section-head"><div><div class="eyebrow">AUDITORIA LOCAL</div><h2>Comandos de sinal</h2></div><button id="signal-refresh" class="ghost small" type="button">Atualizar</button></div>
+        <div id="signal-command-history" class="stack-list"><div class="empty">Nenhum sinal solicitado.</div></div>
       </section>
 
       <section id="tab-logs" class="tab-panel hidden">

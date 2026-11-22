@@ -5,6 +5,7 @@ const $ = (id) => document.getElementById(id);
 let supabase = null;
 let currentUser = null;
 let refreshTimer = null;
+let signalRefreshTimer = null;
 let refreshInFlight = false;
 let lowBatteryNotificationArmed = true;
 let cached = { account: null, trades: [], pending: [], runs: [], logs: [], checks: [], commands: [], settings: null, prompts: null, devices: [], heartbeats: [], ledger: [], aiRequests: [], exports: [], opportunities: [], marketSnapshot: null, groqReports: [], geminiToday: 0, geminiTotal: 0, mark: null };
@@ -12,6 +13,9 @@ let replayTimer = null;
 let replayIndex = 0;
 let replayEvents = [];
 let toastTimer = null;
+let tradingViewInterval = '60';
+let signalStatusCache = new Map();
+let signalPanelPrimed = false;
 
 const money = (value, digits = 2) => value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const signedMoney = (value) => {
@@ -65,10 +69,11 @@ function showLogin(message = '') {
   $('logout').classList.add('hidden'); $('session-state').textContent = 'Desconectado'; $('session-state').className = 'pill muted';
   $('login-error').textContent = message;
   if (refreshTimer) clearInterval(refreshTimer);
+  if (signalRefreshTimer) clearInterval(signalRefreshTimer);
 }
 function showDashboard(email) {
   $('login-panel').classList.add('hidden'); $('dashboard').classList.remove('hidden');
-  $('logout').classList.remove('hidden'); $('session-state').textContent = email || 'Administrador'; $('session-state').className = 'pill good';
+  $('logout').classList.remove('hidden'); $('session-state').textContent = email || 'Administrador'; $('session-state').title = email || 'Administrador'; $('session-state').className = 'pill good';
 }
 async function verifyAdmin(user) {
   const { data, error } = await supabase.from('apex_admins').select('user_id').eq('user_id', user.id).maybeSingle();
@@ -265,6 +270,7 @@ function fillSettings(settings, prompts) {
   $('setting-taker').value = Number(settings.taker_fee_rate || 0) * 100;
   $('setting-daily-loss').value = settings.max_daily_loss_pct ?? 6;
   $('setting-auto-trading').checked = settings.auto_trading_enabled !== false;
+  $('setting-ai-auto-analysis').checked = settings.ai_auto_analysis_enabled !== false;
   $('setting-gemini-model').value = settings.gemini_model || 'gemini-4-hydrogen';
   $('setting-groq-model').value = settings.groq_model || 'openai/gpt-oss-120b';
   $('setting-timezone').value = settings.timezone || 'America/Sao_Paulo';
@@ -276,6 +282,8 @@ function fillSettings(settings, prompts) {
   $('setting-fixed-provider').value = settings.fixed_ai_provider || 'gemini';
   $('setting-fixed-model').value = settings.fixed_ai_model || '';
   $('setting-openrouter-model').value = settings.openrouter_model || 'openrouter/free';
+  $('setting-prompt-profile').value = settings.prompt_profile || 'standard';
+  $('setting-profit-stop-buffer').value = settings.profit_stop_buffer_bps ?? 5;
   $('setting-groq-interval').value = settings.groq_health_interval_hours ?? 4;
   $('setting-minimum-size').checked = settings.simulate_exchange_minimum !== false;
   $('setting-min-notional').value = settings.minimum_notional_usdt ?? 100;
@@ -289,6 +297,10 @@ function fillSettings(settings, prompts) {
   $('analysis-mode-label').textContent = settings.analysis_mode === 'text' ? 'Gráfico em Texto' : 'Chart IMG';
   $('auto-trading-label').textContent = settings.auto_trading_enabled === false ? 'Pausada' : 'Ativa';
   $('auto-trading-label').className = settings.auto_trading_enabled === false ? 'negative' : 'positive';
+  $('ai-auto-label').textContent = settings.ai_auto_analysis_enabled === false ? 'Desligada' : 'Ligada';
+  $('ai-auto-label').className = settings.ai_auto_analysis_enabled === false ? 'negative' : 'positive';
+  $('toggle-ai-auto').textContent = settings.ai_auto_analysis_enabled === false ? 'Ligar IA automática' : 'Desligar IA automática';
+  $('toggle-ai-auto').className = settings.ai_auto_analysis_enabled === false ? 'primary small' : 'ghost small';
   $('daily-guard-label').textContent = `Proteção diária: ${Number(settings.max_daily_loss_pct ?? 6).toFixed(1)}% do saldo inicial (resultado contabilizado)`;
   $('strategy-scan-label').textContent = `Scan a cada 15 min · candle 1H · Groq a cada ${settings.groq_health_interval_hours ?? 4}h`;
 }
@@ -296,9 +308,18 @@ function canvasContext(canvas) {
   if (!canvas) return null;
   const rect = canvas.getBoundingClientRect();
   const width = Math.max(280, Math.floor(rect.width || canvas.clientWidth || 600));
-  const height = Number(canvas.getAttribute('height')) || 180;
+  // Never read the canvas height attribute after assigning its physical pixel size:
+  // canvas.width/height mutate those attributes and previously caused exponential growth.
+  if (!canvas.dataset.logicalHeight) {
+    const authoredHeight = Number(canvas.getAttribute('height')) || 180;
+    canvas.dataset.logicalHeight = String(Math.max(100, Math.min(520, authoredHeight)));
+  }
+  const height = Math.max(100, Math.min(520, Number(canvas.dataset.logicalHeight) || 180));
   const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-  canvas.width = width * dpr; canvas.height = height * dpr;
+  canvas.style.display = 'block';
+  canvas.style.width = '100%';
+  canvas.style.height = `${height}px`;
+  canvas.width = Math.floor(width * dpr); canvas.height = Math.floor(height * dpr);
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
@@ -393,7 +414,7 @@ function drawOpenTradeChart(mark) {
   const candles = snapshot.candles.slice(-70);
   const levels = [
     { name: 'ENTRADA', value: Number(trade.entry_price), color: '#e8b75e', dash: [] },
-    { name: trade.break_even_moved ? 'STOP BE' : 'STOP', value: Number(trade.current_stop_loss), color: '#f07878', dash: [5, 3] },
+    { name: trade.protective_stop_net_covered ? 'STOP LÍQUIDO' : trade.break_even_moved ? 'STOP ENTRADA' : 'STOP', value: Number(trade.current_stop_loss), color: '#f07878', dash: [5, 3] },
     { name: 'TP1 50%', value: Number(trade.tp1_price), color: '#5fb5ea', dash: [3, 3] },
     { name: 'TP2', value: Number(trade.tp2_price), color: '#49d49a', dash: [5, 3] },
   ].filter((l) => Number.isFinite(l.value) && l.value > 0);
@@ -436,7 +457,7 @@ function drawOpenTradeChart(mark) {
   const floating = (pnlForTrade(trade, currentMark) || 0) + Number(trade.realized_pnl_net || 0);
   $('trade-chart-pnl').textContent = `PnL estimado: ${signedMoney(floating)}`;
   $('trade-chart-pnl').className = floating >= 0 ? 'positive' : 'negative';
-  $('trade-chart-note').textContent = `${trade.direction} · entrada ${money(trade.entry_price)} · ${trade.tp1_hit ? 'TP1 executado; 50% já realizado' : 'TP1 ainda pendente'} · ${trade.break_even_moved ? 'stop movido para breakeven' : 'stop inicial ativo'} · PnL indicativo pelo mark price, antes de eventuais custos de saída · dados ${relative(snapshot.updated_at)}.`;
+  $('trade-chart-note').textContent = `${trade.direction} · entrada ${money(trade.entry_price)} · ${trade.tp1_hit ? 'TP1 executado; 50% já realizado' : 'TP1 ainda pendente'} · ${trade.protective_stop_net_covered ? 'stop com custos estimados cobertos' : trade.break_even_moved ? 'stop defensivo na entrada; custos ainda podem gerar perda' : 'stop inicial ativo'} · PnL indicativo pelo mark price, antes de eventuais custos de saída · dados ${relative(snapshot.updated_at)}.`;
 }
 function renderDashboardMetrics(mark) {
   const account = cached.account || {};
@@ -599,6 +620,18 @@ async function startReplay(tradeId) {
   if (replayEvents.length > 1) replayTimer = setInterval(renderStep, 3000);
   $('stop-replay').addEventListener('click', () => { if (replayTimer) clearInterval(replayTimer); replayTimer = null; $('replay-stage').insertAdjacentHTML('beforeend', '<p>Replay interrompido.</p>'); });
 }
+async function toggleAutomaticAi() {
+  const next = cached.settings?.ai_auto_analysis_enabled === false;
+  const { error } = await supabase.from('apex_settings').update({ ai_auto_analysis_enabled: next }).eq('id', 1);
+  if (error) throw error;
+  cached.settings = { ...(cached.settings || {}), ai_auto_analysis_enabled: next };
+  fillSettings(cached.settings, cached.prompts);
+  notifyToast(next
+    ? 'Análise automática por IA ligada. O próximo gatilho poderá chamar Gemini/OpenRouter.'
+    : 'Análises automáticas/forçadas por API suspensas. Detector, Telegram, Groq operacional e trades externos continuam ativos.', 'success');
+  await refreshAll();
+}
+
 async function saveSettings(event) {
   event.preventDefault();
   const message = $('settings-message'); message.textContent = 'Salvando…'; message.className = 'form-message';
@@ -612,6 +645,9 @@ async function saveSettings(event) {
     taker_fee_rate: Number($('setting-taker').value) / 100,
     max_daily_loss_pct: Number($('setting-daily-loss').value),
     auto_trading_enabled: $('setting-auto-trading').checked,
+    ai_auto_analysis_enabled: $('setting-ai-auto-analysis').checked,
+    prompt_profile: $('setting-prompt-profile').value,
+    profit_stop_buffer_bps: Number($('setting-profit-stop-buffer').value),
     gemini_model: $('setting-gemini-model').value.trim(),
     groq_model: $('setting-groq-model').value.trim(),
     timezone: $('setting-timezone').value.trim(),
@@ -635,8 +671,8 @@ async function saveSettings(event) {
   if (!payload.binance_symbol || !payload.gemini_model || !payload.groq_model || !payload.timezone) {
     message.textContent = 'Preencha o par, os modelos e o fuso horário.'; message.classList.add('error-text'); return;
   }
-  if (payload.risk_per_trade_pct <= 0 || payload.risk_per_trade_pct > 2 || payload.max_leverage < 1 || payload.max_leverage > 20 || payload.max_open_trades < 1 || payload.max_open_trades > 5 || payload.max_daily_loss_pct < 0.5 || payload.max_daily_loss_pct > 20 || payload.groq_health_interval_hours < 1 || payload.groq_health_interval_hours > 48 || payload.minimum_notional_usdt <= 0 || payload.trigger_volume_multiplier < 1 || payload.trigger_volume_multiplier > 5 || payload.trigger_sweep_length < 2 || payload.trigger_sweep_length > 100 || payload.trigger_displacement_multiplier < 1 || payload.trigger_displacement_multiplier > 5 || payload.trigger_cooldown < 1 || payload.trigger_cooldown > 30) {
-    message.textContent = 'Revise os limites: risco 0–2%, alavancagem 1–20x, posições 1–5, Groq 1–48h e sensibilidade dentro das faixas indicadas.'; message.classList.add('error-text'); return;
+  if (payload.risk_per_trade_pct <= 0 || payload.risk_per_trade_pct > 2 || payload.max_leverage < 1 || payload.max_leverage > 20 || payload.max_open_trades < 1 || payload.max_open_trades > 5 || payload.max_daily_loss_pct < 0.5 || payload.max_daily_loss_pct > 20 || payload.groq_health_interval_hours < 1 || payload.groq_health_interval_hours > 48 || payload.minimum_notional_usdt <= 0 || payload.trigger_volume_multiplier < 1 || payload.trigger_volume_multiplier > 5 || payload.trigger_sweep_length < 2 || payload.trigger_sweep_length > 100 || payload.trigger_displacement_multiplier < 1 || payload.trigger_displacement_multiplier > 5 || payload.trigger_cooldown < 1 || payload.trigger_cooldown > 30 || !Number.isFinite(payload.profit_stop_buffer_bps) || payload.profit_stop_buffer_bps < 0 || payload.profit_stop_buffer_bps > 100) {
+    message.textContent = 'Revise os limites: risco 0–2%, alavancagem 1–20x, posições 1–5, Groq 1–48h, buffer 0–100 bps e sensibilidade dentro das faixas indicadas.'; message.classList.add('error-text'); return;
   }
   if (payload.ai_provider_strategy === 'fixed' && payload.fixed_ai_provider === 'openrouter' && !payload.fixed_ai_model) payload.fixed_ai_model = payload.openrouter_model;
   const { error } = await supabase.from('apex_settings').update(payload).eq('id', 1);
@@ -665,6 +701,140 @@ async function resetPrompts() {
   message.textContent = 'Prompts padrão restaurados.'; message.className = 'form-message success-text';
   await refreshAll();
 }
+function renderTradingView(interval = tradingViewInterval) {
+  const host = $('tradingview-widget');
+  if (!host) return;
+  tradingViewInterval = String(interval);
+  host.replaceChildren();
+  const container = document.createElement('div');
+  container.className = 'tradingview-widget-container';
+  container.style.cssText = 'height:100%;width:100%;';
+  const widget = document.createElement('div');
+  widget.className = 'tradingview-widget-container__widget';
+  widget.style.cssText = 'height:calc(100% - 28px);width:100%;';
+  container.appendChild(widget);
+  const copyright = document.createElement('div');
+  copyright.className = 'tradingview-widget-copyright';
+  copyright.innerHTML = '<a href="https://www.tradingview.com/symbols/BTCUSDT.P/" rel="noopener nofollow" target="_blank">BTCUSDT.P</a> <span>by TradingView</span>';
+  container.appendChild(copyright);
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.async = true;
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.textContent = JSON.stringify({
+    autosize: true, symbol: 'BINANCE:BTCUSDT.P', interval: tradingViewInterval,
+    timezone: 'America/Sao_Paulo', theme: 'dark', style: '1', locale: 'br',
+    allow_symbol_change: false, calendar: false, hide_side_toolbar: true,
+    hide_top_toolbar: false, hide_legend: false, hide_volume: false,
+    save_image: true, withdateranges: true, backgroundColor: '#000000',
+    gridColor: 'rgba(255,255,255,0.06)', support_host: 'https://www.tradingview.com'
+  });
+  container.appendChild(script);
+  host.appendChild(container);
+  document.querySelectorAll('[data-tv-interval]').forEach((button) =>
+    button.classList.toggle('active', button.dataset.tvInterval === tradingViewInterval));
+}
+
+function setSignalStatus(text, kind = '') {
+  const node = $('signal-status');
+  if (!node) return;
+  node.textContent = text;
+  node.className = `form-message ${kind === 'error' ? 'error-text' : kind === 'success' ? 'success-text' : ''}`;
+}
+async function signalRpc(name, args = {}) {
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) throw error;
+  return data;
+}
+function renderSignalCommands(rows) {
+  const host = $('signal-command-history');
+  const list = rows || [];
+  if (!list.length) { host.innerHTML = '<div class="empty">Nenhum sinal solicitado.</div>'; return; }
+  host.innerHTML = list.map((row) => `<article class="card list-card"><div class="list-card-head"><div><strong>${row.scheduled_at ? 'Sinal agendado' : 'Sinal imediato'}</strong><small>${fmtDate(row.created_at, true)}${row.scheduled_at ? ` · execução prevista ${fmtDate(row.scheduled_at, true)}` : ''}</small></div>${pill(row.status)}</div><p>${escapeHtml(row.error_message || row.result?.audio_route || 'Onda quadrada 440 Hz · 2 segundos')}</p></article>`).join('');
+}
+async function refreshSignalPanel() {
+  if (!supabase || !$('signal-lock-badge')) return;
+  const [state, commands] = await Promise.all([
+    signalRpc('apex_signal_get_state'),
+    supabase.from('device_signal_commands').select('*').order('created_at', { ascending: false }).limit(12),
+  ]);
+  if (commands.error) throw commands.error;
+  const unlocked = !!state?.is_unlocked;
+  $('signal-lock-badge').textContent = unlocked ? 'DESTRAVADO' : 'TRAVADO';
+  $('signal-lock-badge').className = `pill ${unlocked ? 'good' : 'bad'}`;
+  $('signal-beep').disabled = !unlocked || !!state?.continuous_wanted;
+  $('signal-schedule').disabled = !unlocked || !!state?.continuous_wanted;
+  $('signal-continuous-on').disabled = !unlocked || !!state?.continuous_wanted;
+  $('signal-continuous-off').disabled = !state?.continuous_wanted;
+  $('signal-lock').disabled = !unlocked && !state?.continuous_wanted;
+  if (state?.locked_until && new Date(state.locked_until) > new Date()) {
+    $('signal-lock-badge').title = `Bloqueado até ${fmtDate(state.locked_until, true)}`;
+  } else $('signal-lock-badge').title = '';
+  for (const row of commands.data || []) {
+    const previous = signalStatusCache.get(row.id);
+    if (signalPanelPrimed && previous && previous !== row.status && row.status === 'COMPLETED') {
+      notifyToast('Sinal executado com sucesso no Redmi 6A.', 'success');
+    }
+    signalStatusCache.set(row.id, row.status);
+  }
+  signalPanelPrimed = true;
+  renderSignalCommands(commands.data || []);
+}
+async function waitForSignalCompletion(id, timeoutMs = 20000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const { data, error } = await supabase.from('device_signal_commands').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    if (data?.status === 'COMPLETED') return data;
+    if (['FAILED', 'CANCELLED'].includes(data?.status)) throw new Error(data.error_message || `Sinal ${data.status.toLowerCase()}.`);
+    await sleep(700);
+  }
+  throw new Error('O pedido continua pendente. Confira o estado do Redmi e atualize a lista de sinais.');
+}
+async function unlockSignal() {
+  const pin = $('signal-pin').value.trim();
+  if (!pin) { setSignalStatus('Digite a senha para destravar.', 'error'); return; }
+  const ok = await signalRpc('apex_signal_unlock', { p_pin: pin });
+  $('signal-pin').value = '';
+  if (!ok) { setSignalStatus('Senha incorreta ou bloqueio temporário após tentativas inválidas.', 'error'); return; }
+  setSignalStatus('Função destravada. Os comandos sonoros estão disponíveis.', 'success');
+  await refreshSignalPanel();
+}
+async function lockSignal() {
+  await signalRpc('apex_signal_lock');
+  setSignalStatus('Função travada. Reprodução contínua interrompida e sinais pendentes cancelados.', 'success');
+  await refreshSignalPanel();
+}
+async function sendSignalNow() {
+  if (!confirm('Enviar uma onda quadrada de 440 Hz por 2 segundos no Redmi? O volume de mídia será elevado ao máximo. Faça o primeiro teste com o fone fora dos ouvidos.')) return;
+  setSignalStatus('Comando enviado. Aguardando confirmação do Redmi…');
+  const id = await signalRpc('apex_signal_enqueue', { p_scheduled_at: null });
+  await waitForSignalCompletion(id);
+  signalStatusCache.set(id, 'COMPLETED');
+  setSignalStatus('Sinal executado com sucesso no Redmi 6A.', 'success');
+  notifyToast('Sinal executado com sucesso no Redmi 6A.', 'success');
+  await refreshSignalPanel();
+}
+async function scheduleSignal() {
+  const value = $('signal-schedule-at').value;
+  if (!value) throw new Error('Escolha a data e o horário do sinal.');
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime()) || date <= new Date()) throw new Error('O agendamento precisa estar no futuro.');
+  const id = await signalRpc('apex_signal_enqueue', { p_scheduled_at: date.toISOString() });
+  $('signal-schedule-at').value = '';
+  setSignalStatus(`Sinal agendado para ${fmtDate(date.toISOString(), true)}. O Redmi executará mesmo que o site esteja fechado, desde que o servidor esteja online.`, 'success');
+  notifyToast('Sinal agendado no Redmi 6A.', 'success');
+  await refreshSignalPanel();
+  return id;
+}
+async function setContinuousSignal(enabled) {
+  await signalRpc('apex_signal_set_continuous', { p_enabled: !!enabled });
+  const message = enabled ? 'Som contínuo ativado no Redmi 6A.' : 'Som contínuo desligado no Redmi 6A.';
+  setSignalStatus(enabled ? 'Som contínuo ativado. Use Som contínuo OFF ou Travar para interromper.' : 'Som contínuo desligado.', 'success');
+  notifyToast(message, 'success');
+  await refreshSignalPanel();
+}
+
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 async function waitForCommand(commandId, timeoutMs = 100000) {
   const deadline = Date.now() + timeoutMs;
@@ -832,12 +1002,12 @@ async function init() {
   supabase = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.user) {
-    try { currentUser = session.user; await verifyAdmin(currentUser); showDashboard(currentUser.email); await refreshAll(); }
+    try { currentUser = session.user; await verifyAdmin(currentUser); showDashboard(currentUser.email); await refreshAll(); renderTradingView('60'); await refreshSignalPanel().catch((e) => setSignalStatus(e.message, 'error')); }
     catch (e) { showLogin(e.message); }
   }
   supabase.auth.onAuthStateChange(async (_event, sessionNow) => {
     if (!sessionNow?.user) { currentUser = null; showLogin(); return; }
-    try { currentUser = sessionNow.user; await verifyAdmin(currentUser); showDashboard(currentUser.email); await refreshAll(); }
+    try { currentUser = sessionNow.user; await verifyAdmin(currentUser); showDashboard(currentUser.email); await refreshAll(); renderTradingView('60'); await refreshSignalPanel().catch((e) => setSignalStatus(e.message, 'error')); }
     catch (e) { await supabase.auth.signOut(); showLogin(e.message); }
   });
   $('login-form').addEventListener('submit', async (e) => {
@@ -857,7 +1027,7 @@ async function init() {
   document.querySelectorAll('[data-open-tab]').forEach((b) => b.addEventListener('click', () => activateTab(b.dataset.openTab)));
   $('force-analysis').textContent = 'Forçar análise IA';
   $('force-analysis').addEventListener('click', async () => {
-    if (!confirm('Solicitar uma análise agora? O roteador tentará Gemini, OpenRouter e Groq conforme as configurações. Pode consumir créditos dos provedores.')) return;
+    if (!confirm('Solicitar uma análise agora? O roteador tentará Gemini e OpenRouter conforme as configurações; Groq fica reservado à saúde e relatórios. Pode consumir créditos dos provedores.')) return;
     try { await enqueueCommand('force_analysis'); notifyToast('Análise solicitada. O Redmi processará a fila em até 30 segundos.', 'success'); await refreshAll(); }
     catch (e) { notifyToast(e.message, 'error'); }
   });
@@ -868,6 +1038,15 @@ async function init() {
   });
   $('close-all').addEventListener('click', () => commandWithConfirm('close_open_trade', {}, 'Fechar todas as operações virtuais abertas e cancelar entradas pendentes?', 'Comando de fechamento enviado ao Redmi.'));
   $('settings-form').addEventListener('submit', saveSettings);
+  $('toggle-ai-auto').addEventListener('click', () => toggleAutomaticAi().catch((e) => notifyToast(e.message, 'error')));
+  document.querySelectorAll('[data-tv-interval]').forEach((b) => b.addEventListener('click', () => renderTradingView(b.dataset.tvInterval)));
+  $('signal-unlock').addEventListener('click', () => unlockSignal().catch((e) => setSignalStatus(e.message, 'error')));
+  $('signal-lock').addEventListener('click', () => lockSignal().catch((e) => setSignalStatus(e.message, 'error')));
+  $('signal-beep').addEventListener('click', () => sendSignalNow().catch((e) => setSignalStatus(e.message, 'error')));
+  $('signal-schedule').addEventListener('click', () => scheduleSignal().catch((e) => setSignalStatus(e.message, 'error')));
+  $('signal-continuous-on').addEventListener('click', () => setContinuousSignal(true).catch((e) => setSignalStatus(e.message, 'error')));
+  $('signal-continuous-off').addEventListener('click', () => setContinuousSignal(false).catch((e) => setSignalStatus(e.message, 'error')));
+  $('signal-refresh').addEventListener('click', () => refreshSignalPanel().catch((e) => setSignalStatus(e.message, 'error')));
   $('deposit-form').addEventListener('submit', addVirtualDeposit);
   $('paste-manual-analysis').addEventListener('click', pasteManualAnalysis);
   $('confirm-manual-analysis').addEventListener('click', submitManualAnalysis);
@@ -899,7 +1078,10 @@ async function init() {
   });
   if (location.hash && $(`tab-${location.hash.slice(1)}`)) activateTab(location.hash.slice(1));
   refreshTimer = setInterval(() => refreshAll().catch((e) => console.error('ApexPrime refresh:', e)), 30000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshAll().catch(console.error); });
+  signalRefreshTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') refreshSignalPanel().catch((e) => console.error('ApexPrime signal:', e));
+  }, 2000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { refreshAll().catch(console.error); refreshSignalPanel().catch(console.error); } });
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.error));
