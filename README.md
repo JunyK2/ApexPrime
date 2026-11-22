@@ -1,83 +1,63 @@
-# ApexPrime v1.0 — Redmi 6A Edition
+# ApexPrime — Redmi 6A · Paper Trading
 
-ApexPrime é um sistema autônomo de **paper trading BTCUSDT USDⓈ-M Futures**, executado no Redmi 6A via Termux. O GitHub hospeda o código, executa CI e publica o PWA; não executa o motor de mercado.
+Sistema autônomo de simulação BTCUSDT USDⓈ-M Futures executado no Redmi 6A via Termux. O GitHub hospeda o código, faz CI e publica o PWA; o motor de mercado funciona no celular.
 
-> **Esta distribuição é exclusivamente simulada.** O worker não contém integração para enviar ordens à Binance, não lê saldo real e bloqueia qualquer tentativa de ativar `APEX_REAL_TRADING_ENABLED=true`.
+> **Somente paper trading.** Não envia ordens reais, não lê saldo real e bloqueia qualquer configuração de execução real.
 
-## Funcionalidades
+## Recursos
 
-- Scan de mercado a cada 15 minutos usando o último candle 1H fechado.
-- Reprodução do gatilho TradingView SMC (volume, sweep, displacement + FVG, cooldown).
-- Análises Gemini nos modos Chart IMG (1D, 4H, 1H, 15M, 5M) ou candles em texto.
-- Prompts customizáveis no Supabase, com fallback aos prompts padrão do projeto.
-- APEX_TABLE validada antes de qualquer mudança no saldo virtual.
-- Paper trading com saldo inicial de 20 USDT, risco por trade limitado a 2%, alavancagem simulada limitada a 20x, TP1 parcial, breakeven e TP2.
-- Entradas PULLBACK/CONFIRMACAO pendentes, expiração e cancelamento manual.
-- Gestão de posição/stop/alvo a cada minuto, funding histórico e estimativa de taxas maker/taker.
-- Proteção de perda diária configurável e pausa global de novas entradas.
-- Alertas Telegram e análise operacional Groq, incluindo telemetria do Redmi.
-- Telemetria de bateria, carregamento, temperatura, Wi-Fi, RSSI, uptime e timeline de heartbeat.
-- PWA administrativo com dashboard, posições, histórico/replay, análises, prompts, configurações, testes e logs.
-- Inicialização pelo Termux:Boot e supervisor que relança o processo Python.
+- Scan a cada 15 minutos usando candles 1H fechados; manutenção de operações a cada minuto.
+- Detector baseado no script Pine enviado: volume, sweep, displacement + FVG, cooldown e sensibilidade configurável.
+- Roteamento automático Gemini → OpenRouter `openrouter/free` → Groq; visão primeiro quando há imagens e fallback para candles em texto.
+- Chart IMG limitado a 800×600; quando falha, análise muda para candles tabulares.
+- Configuração automática ou provedor/modelo fixo.
+- Histórico registra provedor, modelo, origem manual/automática e tipo efetivo de gráfico.
+- Análise externa via APEX_TABLE com confirmação antes de abrir trade virtual.
+- Paper trading com saldo inicial de 100 USDT, risco máximo de 2%, alavancagem simulada até 20x, TP1, breakeven e TP2.
+- Filtro opcional de notional mínimo da Binance; não aumenta o risco se o mínimo não couber no orçamento de risco.
+- Depósitos virtuais auditados no ledger, win-rate geral/por provedor e histórico/replay.
+- Exportação de candles em texto (inclusive data passada) e imagens atuais Chart IMG.
+- Gráficos do mercado/operação aberta, eventos do detector e bateria/autonomia aproximada do Redmi.
+- Groq health-check a cada 4h por padrão, ajustável entre 1 e 48h, relatório sob demanda e revisão pós-trade.
+- Telegram recebe resultados WIN/LOSS, PnL, análise original, contexto de candles e revisão Groq quando disponível.
+- Termux:Boot, supervisor, telemetria, timeline online/offline e fila Supabase.
 
-## Cadência do servidor
+## Cadência
 
 | Tarefa | Intervalo |
 |---|---:|
 | Heartbeat | 60 s |
-| Gestão de operações e entradas pendentes | 60 s |
-| Fila de comandos do PWA | 30 s |
-| Bateria/Wi-Fi/temperatura | 5 min |
-| Scan de mercado com candle 1H fechado | 15 min |
-| Groq — saúde do servidor | 15 min |
-| Gemini | Só em novo gatilho ou análise manual |
+| Gestão de operações/entradas | 60 s |
+| Fila do PWA | 30 s |
+| Telemetria do Redmi | 5 min |
+| Scan de oportunidade | 15 min (candle 1H) |
+| Groq health check | 4 h por padrão (configurável) |
+| Revisão Groq pós-trade | Após cada trade encerrado |
 
-## Instalação
+## Atualização de instalação já existente
 
-Siga `docs/FINALIZACAO-PAPER-TRADING.md` para atualizar um projeto já instalado. Para instalação limpa no Redmi, consulte `docs/REDMI6A-INSTALACAO-COMPLETA.md`.
+Siga `docs/ATUALIZACAO-IA-DASHBOARD.md`. A instalação anterior deste projeto tem migrations 001–005. Para esta versão, execute 006, 007 e 008 no Supabase, na ordem apresentada no guia.
 
-Migrations:
+## OpenRouter
 
-1. `001_initial_schema.sql` — schema base (já executada nas instalações anteriores).
-2. `002_pending_entries.sql` — entradas pendentes/cursor (já executada anteriormente).
-3. `003_redmi_device_monitoring.sql` — telemetria Redmi (já executada anteriormente).
-4. `004_dashboard_individual_actions.sql` — comandos de saída/cancelamento por operação.
-5. `005_automation_risk_controls.sql` — pausa de novas entradas e limite de perda diária.
+Adicione no `.env` do Redmi:
 
-Em quem já executou 001–003, execute somente 004 e 005 agora.
+```env
+OPENROUTER_API_KEY=SUA_CHAVE
+OPENROUTER_API_BASE=https://openrouter.ai/api/v1
+```
+
+No modo automático, `openrouter/free` usa o roteador de modelos gratuitos disponível no OpenRouter. Disponibilidade, limites e suporte a imagens podem variar; a cadeia tem fallback para texto e Groq.
 
 ## Configuração segura
 
 - `PAPER_TRADING_ONLY=true`
 - `APEX_REAL_TRADING_ENABLED=false`
-- `BINANCE_FUTURES_API_KEY` e `BINANCE_FUTURES_API_SECRET` vazias/não usadas.
-- `SUPABASE_SERVICE_ROLE_KEY` permanece apenas no `.env` local do Termux.
-- O PWA recebe somente Supabase URL + chave `anon`/publishable, com RLS e autenticação.
-- Nunca comite `.env`, tokens Telegram ou chaves privadas.
+- `SUPABASE_SERVICE_ROLE_KEY` somente no `.env` local do Termux.
+- PWA recebe somente URL do Supabase e chave pública `anon`/publishable.
+- Nunca comite `.env`, tokens do Telegram ou chaves privadas.
 
-## Uso
-
-```bash
-bash android/termux/install.sh
-# configure .env, sem enviar o arquivo ao GitHub
-bash scripts/start-apexprime.sh
-bash scripts/status-apexprime.sh
-```
-
-Logs:
-
-```bash
-tail -f runtime/daemon.log
-tail -f runtime/supervisor.log
-```
-
-Parada manual:
-
-```bash
-bash scripts/stop-apexprime.sh
-```
-
-## Testes
+## Testes locais
 
 ```bash
 python -m compileall -q apexprime
@@ -86,23 +66,13 @@ node --check frontend/app.js
 node --check frontend/sw.js
 ```
 
-O botão **Executar testes** no PWA envia um comando ao Redmi para testar Binance Futures público, Supabase, gerador texto, Gemini, Groq, Chart IMG e Telegram. A chamada do Telegram envia uma mensagem real de teste ao canal; provedores de IA podem consumir cota.
+## Documentação
 
-## Avisos operacionais
+- `docs/ATUALIZACAO-IA-DASHBOARD.md` — atualização desta versão.
+- `docs/REDMI6A-INSTALACAO-COMPLETA.md` — instalação/boot do servidor.
+- `docs/FINALIZACAO-PAPER-TRADING.md` — arquitetura paper trading.
+- `SECURITY.md` — regras de segurança.
 
-- O preço/candle de execução é obtido da Binance Futures pública. Disponibilidade de API e acesso a USDⓈ-M Futures podem variar por rede/região/conta. O teste do endpoint precisa funcionar no Redmi.
-- Chart IMG e Gemini trabalham com dados/prints públicos; a IA pode interpretar imagens incorretamente. A validação do JSON impede campos inválidos, mas não prova que a análise esteja correta.
-- A simulação usa candles de 1 minuto fechados e uma regra conservadora quando stop e alvo aparecem no mesmo candle: o stop é considerado primeiro.
-- Maker/taker, slippage e funding são aproximações configuráveis; não equivalem a resultado real de exchange.
-- O Redmi deve permanecer ventilado e com Wi-Fi estável. O software não pode ligar o aparelho se ele desligar fisicamente por falta de bateria.
-- Paper trading não garante rentabilidade. Acompanhe logs, amostras e comportamento por um período prolongado antes de tirar conclusões sobre a estratégia.
+## Limitações
 
-## Estrutura
-
-- `apexprime/` — motor, mercado, IA, risco, paper execution e telemetria.
-- `frontend/` — PWA administrativa.
-- `supabase/migrations/` — schema e atualizações.
-- `prompts/` — prompts padrão Gemini.
-- `android/termux/` e `scripts/` — instalação, boot e supervisor.
-- `tests/` — testes unitários.
-- `docs/` — arquitetura, instalação e segurança.
+Resultados virtuais não predizem rentabilidade real. Taxas, funding, slippage e fill de candles são aproximações. O PnL mostrado no gráfico usa o mark price mais recente. As estimativas de autonomia do Redmi são tendências, não garantias. A execução real de ordens está ausente e bloqueada.
