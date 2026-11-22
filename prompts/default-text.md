@@ -82,3 +82,7 @@ FORMATO DA RESPOSTA
 [/APEX_TABLE]
 
 Para NO_TRADE, use direction="NONE", entry_type="NENHUMA" e valores numéricos 0. O consumidor ignora os níveis numéricos quando signal=NO_TRADE. O bloco deve conter JSON válido, aspas duplas e nenhum texto extra entre os delimitadores.
+
+REGRA FIXA DE VALIDAÇÃO: o campo "score" da APEX_TABLE deve ser um número entre 0 e 10 inclusive. Nunca responda com score acima de 10, abaixo de 0, nem texto no lugar do número. Use 0 se NO_TRADE e a pontuação não for aplicável.
+
+CONFLUÊNCIAS ADICIONAIS: quando forem fornecidos dados, avalie Open Interest (OI) e sua variação, Funding Rate, Long/Short Ratio (LSR), ATR(14), ICT Killzones pelo horário de New York, filtro de volatilidade/compressão e Premium/Discount. Trate-os como contexto/confluência, não como sinais autônomos. Não invente valores N/D. OI/LSR/Funding não garantem direção. Premium/Discount é a posição relativa dentro da faixa objetiva enviada.
