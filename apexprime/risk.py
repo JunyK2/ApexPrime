@@ -15,7 +15,8 @@ REQUIRED_ENUMS = {
 }
 
 
-def validate_apex_table(data: dict[str, Any]) -> dict[str, Any]:
+def validate_apex_table(data: dict[str, Any], *, minimum_tp1_rr: float = 1.2,
+                         maximum_tp1_rr: float = 2.5) -> dict[str, Any]:
     """Validate and normalize the model's APEX_TABLE before it can touch paper balance."""
     result = dict(data)
     for key, allowed in REQUIRED_ENUMS.items():
@@ -33,6 +34,9 @@ def validate_apex_table(data: dict[str, Any]) -> dict[str, Any]:
     result["strategy_name"] = str(result.get("strategy_name", "ApexPrime"))[:80]
     result["analysis_summary"] = str(result.get("analysis_summary", ""))[:500]
 
+    # Model routers sometimes return scores slightly outside the requested range.
+    # Normalize rather than discarding an otherwise valid signal; all prompts specify 0-10.
+    result["score"] = min(10.0, max(0.0, result["score"]))
     if result["signal"] == "NO_TRADE":
         if result["direction"] != "NONE":
             raise ValueError("NO_TRADE precisa usar direction=NONE")
@@ -54,11 +58,17 @@ def validate_apex_table(data: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Níveis SHORT precisam obedecer stop > entry > TP1 > TP2")
         actual_rr = (entry - tp1) / (stop - entry)
     result["calculated_rr_tp1"] = actual_rr
-    # A regra operacional pede TP1 por volta de 1,5R. Permitimos 1,2R–2,0R.
-    if actual_rr < 1.2 or actual_rr > 2.0:
-        raise ValueError(f"R:R calculado de TP1 ({actual_rr:.2f}) fora do intervalo aceitável 1,2–2,0")
-    if not 0 <= result["score"] <= 10:
-        raise ValueError("score precisa estar entre 0 e 10")
+    # Keep the visible APEX_TABLE R:R aligned with the actual entry/stop/TP1 geometry.
+    result["risk_reward_tp1"] = actual_rr
+    # The experimental nearest-structure profile allows a closer TP1, but not an
+    # arbitrarily tiny target. Standard profile preserves the original 1.2R minimum.
+    minimum_tp1_rr = max(0.25, min(float(minimum_tp1_rr), 2.5))
+    maximum_tp1_rr = max(minimum_tp1_rr, min(float(maximum_tp1_rr), 4.0))
+    if actual_rr < minimum_tp1_rr or actual_rr > maximum_tp1_rr:
+        raise ValueError(
+            f"R:R calculado de TP1 ({actual_rr:.2f}) fora do intervalo aceitável "
+            f"{minimum_tp1_rr:.2f}–{maximum_tp1_rr:.2f}"
+        )
     return result
 
 

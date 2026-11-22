@@ -139,6 +139,141 @@ class BinanceFutures:
             time.sleep(0.15)
         return all_rows
 
+
+    def open_interest(self, symbol: str) -> dict[str, Any]:
+        return self._get("/fapi/v1/openInterest", {"symbol": symbol})
+
+    def open_interest_history(self, symbol: str, period: str = "1h",
+                              start_time: datetime | None = None,
+                              end_time: datetime | None = None,
+                              limit: int = 2) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"symbol": symbol, "period": period,
+                                  "limit": min(max(int(limit), 1), 500)}
+        if start_time:
+            params["startTime"] = to_ms(start_time)
+        if end_time:
+            params["endTime"] = to_ms(end_time)
+        return self._get("/futures/data/openInterestHist", params)
+
+    def global_long_short_ratio(self, symbol: str, period: str = "1h",
+                                start_time: datetime | None = None,
+                                end_time: datetime | None = None,
+                                limit: int = 2) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"symbol": symbol, "period": period,
+                                  "limit": min(max(int(limit), 1), 500)}
+        if start_time:
+            params["startTime"] = to_ms(start_time)
+        if end_time:
+            params["endTime"] = to_ms(end_time)
+        return self._get("/futures/data/globalLongShortAccountRatio", params)
+
+    def advanced_market_context(self, symbol: str, candles_1h: list[Candle],
+                                reference_time: datetime | None = None) -> dict[str, Any]:
+        """Best-effort OI/funding/LSR/ATR/ICT context; missing endpoints never fail chart export."""
+        from statistics import mean
+        from zoneinfo import ZoneInfo
+        from datetime import timedelta
+
+        now = reference_time or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)
+        context: dict[str, Any] = {
+            "reference_time_utc": now.isoformat(), "open_interest": None,
+            "open_interest_change_pct": None, "funding_rate": None,
+            "long_short_ratio": None, "long_account_pct": None, "short_account_pct": None,
+            "atr_14": None, "atr_pct": None, "atr_compression_ratio": None,
+            "volatility_state": "N/D", "premium_discount": "N/D",
+            "range_high": None, "range_low": None, "range_midpoint": None,
+            "ict_killzone": "N/D", "data_notes": [],
+        }
+        # ATR(14), Wilder smoothing is not needed for a descriptive prompt; simple mean TR.
+        if len(candles_1h) >= 15:
+            trs = []
+            for idx in range(1, len(candles_1h)):
+                c = candles_1h[idx]
+                prev = candles_1h[idx - 1].close
+                trs.append(max(c.high - c.low, abs(c.high - prev), abs(c.low - prev)))
+            atr14 = mean(trs[-14:])
+            context["atr_14"] = atr14
+            context["atr_pct"] = (atr14 / candles_1h[-1].close * 100) if candles_1h[-1].close else None
+            if len(trs) >= 50:
+                atr_base = mean(trs[-50:])
+                ratio = atr14 / atr_base if atr_base else None
+                context["atr_compression_ratio"] = ratio
+                context["volatility_state"] = "COMPRESSAO" if ratio is not None and ratio < 0.75 else "EXPANSAO" if ratio and ratio > 1.25 else "NORMAL"
+            else:
+                context["volatility_state"] = "ATR calculado; histórico curto para compressão"
+        else:
+            context["data_notes"].append("Poucos candles 1H para ATR(14).")
+
+        recent = candles_1h[-20:]
+        if recent:
+            hi = max(c.high for c in recent); lo = min(c.low for c in recent)
+            mid = (hi + lo) / 2
+            price = recent[-1].close
+            context.update({"range_high": hi, "range_low": lo, "range_midpoint": mid,
+                            "premium_discount": "PREMIUM" if price > mid else "DISCOUNT" if price < mid else "EQUILIBRIO"})
+
+        # ICT reference windows in New York local time (DST-aware): Asia 19-23,
+        # London 02-05, New York AM 08:30-11:00, New York PM 13:30-16:00.
+        try:
+            ny = now.astimezone(ZoneInfo("America/New_York"))
+            minute = ny.hour * 60 + ny.minute
+            if 19 * 60 <= minute < 23 * 60:
+                killzone = "ASIA"
+            elif 2 * 60 <= minute < 5 * 60:
+                killzone = "LONDON"
+            elif 8 * 60 + 30 <= minute < 11 * 60:
+                killzone = "NEW_YORK_AM"
+            elif 13 * 60 + 30 <= minute < 16 * 60:
+                killzone = "NEW_YORK_PM"
+            else:
+                killzone = "FORA_DAS_KILLZONES"
+            context["ict_killzone"] = f"{killzone} ({ny.strftime('%H:%M')} New York)"
+        except Exception:
+            context["ict_killzone"] = "N/D (timezone indisponível)"
+
+        # Historical endpoints are best-effort. For old requested snapshots the API may
+        # not retain the requested date; then the exact field stays N/D rather than using now.
+        try:
+            if abs((datetime.now(timezone.utc) - now).total_seconds()) <= 900:
+                oi = self.open_interest(symbol)
+                context["open_interest"] = float(oi.get("openInterest"))
+            oi_hist = self.open_interest_history(symbol, "1h", now - timedelta(hours=2), now, 2)
+            if len(oi_hist) >= 2:
+                old = float(oi_hist[0].get("sumOpenInterest", 0) or 0)
+                new = float(oi_hist[-1].get("sumOpenInterest", 0) or 0)
+                if old:
+                    context["open_interest_change_pct"] = (new / old - 1) * 100
+                if context["open_interest"] is None:
+                    context["open_interest"] = new
+            elif context["open_interest"] is None:
+                context["data_notes"].append("Open Interest histórico indisponível para o horário de referência.")
+        except Exception as exc:
+            context["data_notes"].append(f"Open Interest indisponível ({type(exc).__name__}).")
+
+        try:
+            lsr = self.global_long_short_ratio(symbol, "1h", now - timedelta(hours=2), now, 2)
+            if lsr:
+                latest = lsr[-1]
+                context["long_short_ratio"] = float(latest.get("longShortRatio"))
+                context["long_account_pct"] = float(latest.get("longAccount")) * 100
+                context["short_account_pct"] = float(latest.get("shortAccount")) * 100
+        except Exception as exc:
+            context["data_notes"].append(f"Long/Short Ratio indisponível ({type(exc).__name__}).")
+
+        try:
+            funding = self._get("/fapi/v1/fundingRate", {
+                "symbol": symbol, "startTime": to_ms(now - timedelta(hours=16)),
+                "endTime": to_ms(now), "limit": 3,
+            })
+            if funding:
+                context["funding_rate"] = float(funding[-1].get("fundingRate"))
+        except Exception as exc:
+            context["data_notes"].append(f"Funding Rate indisponível ({type(exc).__name__}).")
+        return context
+
     def health(self) -> dict[str, Any]:
         """Probe the same public Futures endpoints used by the trading engine.
 

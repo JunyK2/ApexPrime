@@ -121,6 +121,16 @@ class ChartImgClient:
         return images
 
 
+def is_gemini_high_demand_error(error: Exception | str) -> bool:
+    """Detect transient Gemini overload/quota responses worth retrying before OpenRouter."""
+    text = str(error).lower()
+    return any(token in text for token in (
+        "http 503", "unavailable", "high demand", "spikes in demand",
+        "temporarily unavailable", "resource_exhausted", "http 429",
+        "too many requests", "rate limit exceeded",
+    ))
+
+
 class GeminiClient:
     def __init__(self, api_key: str, model: str,
                  base_url: str = "https://generativelanguage.googleapis.com/v1beta"):
@@ -229,7 +239,8 @@ class OpenAICompatibleAnalysisClient:
         self.session = requests.Session()
 
     def analyze(self, prompt: str, *, text_data: str | None = None,
-                images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                images: list[dict[str, Any]] | None = None,
+                max_tokens: int = 10000) -> dict[str, Any]:
         user_parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         if text_data:
             user_parts.append({"type": "text", "text": "\n\nDADOS TABULARES DOS CANDLES:\n" + text_data})
@@ -254,7 +265,7 @@ class OpenAICompatibleAnalysisClient:
                 {"role": "user", "content": content},
             ],
             "temperature": 0.2,
-            "max_tokens": 10000,
+            "max_tokens": max(128, min(4096, int(max_tokens))),
         }
         started = time.monotonic()
         response = self.session.post(
@@ -298,10 +309,38 @@ class GroqAnalysisClient(OpenAICompatibleAnalysisClient):
         super().__init__(api_key, model, base_url, "GROQ")
 
     def review_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Compact, text-only trade report. Never send candle charts, market snapshots,
+        # or the original full AI response to Groq: its TPM tier is deliberately small.
+        compact = {k: payload.get(k) for k in (
+            "symbol", "direction", "entry_price", "exit_price", "close_reason",
+            "result_category", "realized_pnl_net", "entry_fee", "exit_fees",
+            "funding_paid", "tp1_hit", "break_even_moved", "opened_at", "closed_at",
+            "analysis_provider", "analysis_model", "analysis_mode", "analysis_source",
+            "event_sequence",
+        ) if payload.get(k) is not None}
         prompt = (
-            "Faça uma revisão pós-operação do ApexPrime. Compare a tese original, os candles entre entrada e saída, "
-            "o desfecho e os custos. Explique o que ajudou/atrapalhou, se a execução simulada seguiu o plano, "
-            "e uma melhoria observável sem recomendar alavancagem maior. Não invente dados. Responda em português, "
-            "com resumo curto e pontos objetivos.\n\nCONTEXTO:\n" + str(payload)[:24000]
+            "Escreva um resumo pós-operação MUITO breve, em português (máximo 3 frases / 70 palavras). "
+            "Apenas relate o que aconteceu, o resultado líquido e custos relevantes. Não analise candles, "
+            "não explique causas técnicas, não proponha estratégias e não invente dados.\n"
+            + str(compact)[:2200]
         )
-        return self.analyze(prompt)
+        started = time.monotonic()
+        response = self.session.post(
+            self.base + "/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json={"model": self.model, "messages": [
+                {"role": "system", "content": "Resuma somente o relatório compacto recebido. Até 70 palavras."},
+                {"role": "user", "content": prompt},
+            ], "temperature": 0.1, "max_tokens": 220},
+            timeout=35,
+        )
+        latency = int((time.monotonic() - started) * 1000)
+        if not response.ok:
+            raise RuntimeError(f"GROQ HTTP {response.status_code}: {response.text[:700]}")
+        payload_out = response.json()
+        output = str(payload_out.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+        if not output:
+            raise RuntimeError("Groq respondeu sem texto utilizável")
+        return {"text": output, "latency_ms": latency,
+                "input_tokens": (payload_out.get("usage") or {}).get("prompt_tokens"),
+                "output_tokens": (payload_out.get("usage") or {}).get("completion_tokens")}

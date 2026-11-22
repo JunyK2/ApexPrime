@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 import signal
 import time
+import threading
 from datetime import datetime, timezone
 
 from .config import Config
 from .db import SupabaseREST
 from .device import DeviceReporter
+from .device_signal import DeviceSignalController
 from .engine import ApexEngine
 from .notify import TelegramNotifier
 from .utils import setup_logging
@@ -27,6 +29,13 @@ def run() -> int:
     engine = ApexEngine(config)
     telegram = TelegramNotifier(config.telegram_bot_token, config.telegram_chat_id)
     reporter = DeviceReporter(engine.db, telegram, config)
+    signal_controller = DeviceSignalController(engine.db)
+    scan_lock = threading.Lock()
+    scan_thread: threading.Thread | None = None
+    queue_lock = threading.Lock()
+    queue_thread: threading.Thread | None = None
+    signal_stop = threading.Event()
+    signal_thread: threading.Thread | None = None
 
     stopping = False
     def stop_handler(signum, frame):
@@ -35,6 +44,22 @@ def run() -> int:
         log.warning("Sinal %s recebido; encerrando daemon", signum)
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
+
+    def signal_worker() -> None:
+        # Keep the isolated audio controller responsive even if queue processing or a
+        # provider request blocks the main daemon loop for several minutes.
+        while not signal_stop.is_set():
+            try:
+                signal_controller.tick()
+            except Exception as exc:
+                log.warning("Módulo de sinal indisponível: %s", type(exc).__name__)
+            signal_stop.wait(0.20)
+
+    try:
+        signal_thread = threading.Thread(target=signal_worker, name="apexprime-device-signal", daemon=True)
+        signal_thread.start()
+    except Exception:
+        log.exception("Não foi possível iniciar o thread isolado de sinal sonoro")
 
     try:
         reporter.announce_start()
@@ -123,22 +148,44 @@ def run() -> int:
                 last_market_snapshot = now
 
             if _next_due(last_queue, config.queue_poll_interval_seconds, now):
-                try:
-                    engine.process_queue(max_requests=5)
-                except Exception as exc:
-                    log.warning("Fila indisponível; será consultada novamente: %s", type(exc).__name__)
+                def queue_worker() -> None:
+                    try:
+                        # A force-analysis command may trigger Gemini's 5 x 120s retry
+                        # policy. Process it off-loop so heartbeat, maintenance and audio
+                        # remain responsive.
+                        queue_engine = ApexEngine(config)
+                        queue_engine.process_queue(max_requests=5)
+                    except Exception as exc:
+                        log.warning("Fila indisponível; será consultada novamente: %s", type(exc).__name__)
+                    finally:
+                        queue_lock.release()
+                if queue_lock.acquire(blocking=False):
+                    queue_thread = threading.Thread(target=queue_worker, name="apexprime-command-queue", daemon=True)
+                    queue_thread.start()
                 last_queue = now
 
             if _next_due(last_scan, config.market_scan_interval_seconds, now):
-                try:
-                    # 1H candles are the strategy source; this job checks for a newly closed 1H candle every 15m.
-                    engine.run_hourly(include_maintenance=False, check_groq=False)
-                except Exception as exc:
-                    log.exception("Falha no scan 15m: %s", type(exc).__name__)
+                def scan_worker() -> None:
                     try:
-                        engine.db.log("ERROR", "market_scan", "Falha no scan de mercado", details={"error_type": type(exc).__name__})
-                    except Exception:
-                        pass
+                        # Gemini may retry high-demand responses for several minutes.
+                        # Use an independent engine in a daemon thread so the main loop
+                        # continues trade maintenance, queue, telemetry and device signals.
+                        scan_engine = ApexEngine(config)
+                        scan_engine.run_hourly(include_maintenance=False, check_groq=False)
+                    except Exception as exc:
+                        log.exception("Falha no scan 15m: %s", type(exc).__name__)
+                        try:
+                            engine.db.log("ERROR", "market_scan", "Falha no scan de mercado",
+                                          details={"error_type": type(exc).__name__})
+                        except Exception:
+                            pass
+                    finally:
+                        scan_lock.release()
+                if scan_lock.acquire(blocking=False):
+                    scan_thread = threading.Thread(target=scan_worker, name="apexprime-market-scan", daemon=True)
+                    scan_thread.start()
+                else:
+                    log.warning("Scan anterior ainda em execução; ciclo de mercado atual ignorado para evitar duplicação")
                 last_scan = now
 
             if _next_due(last_settings_reload, 300, now):
@@ -178,8 +225,15 @@ def run() -> int:
                     log.warning("Verificação Groq falhou: %s", type(exc).__name__)
                 last_groq = now
 
-            time.sleep(5)
+            time.sleep(1)
     finally:
+        signal_stop.set()
+        if signal_thread and signal_thread.is_alive():
+            signal_thread.join(timeout=3)
+        try:
+            signal_controller.shutdown()
+        except Exception:
+            pass
         try:
             reporter._event("SERVICE_STOPPED", {"reason": "daemon_shutdown"})
         except Exception:

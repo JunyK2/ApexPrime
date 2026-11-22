@@ -7,7 +7,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .analysis import (ChartImgClient, GeminiClient, GroqHealthClient, GroqAnalysisClient,
-                      OpenRouterClient, candles_to_text, load_prompt, TIMEFRAMES)
+                      OpenRouterClient, candles_to_text, load_prompt, TIMEFRAMES,
+                      is_gemini_high_demand_error)
 from .config import Config
 from .db import SupabaseREST
 from .execution import PaperExecutor
@@ -125,6 +126,37 @@ class ApexEngine:
                 latency_ms=latency_ms, usage=result, error=error,
             )
 
+    @staticmethod
+    def _format_market_context(context: dict[str, Any]) -> str:
+        labels = {
+            "open_interest": "Open Interest (OI)",
+            "open_interest_change_pct": "Variação OI (%)",
+            "funding_rate": "Funding Rate",
+            "long_short_ratio": "Long/Short Ratio (LSR)",
+            "long_account_pct": "Contas long (%)",
+            "short_account_pct": "Contas short (%)",
+            "atr_14": "ATR(14) 1H",
+            "atr_pct": "ATR(14) % do preço",
+            "atr_compression_ratio": "ATR atual / média 50",
+            "volatility_state": "Filtro volatilidade/compressão",
+            "ict_killzone": "ICT Killzone (horários New York)",
+            "premium_discount": "Confluência Premium/Discount",
+            "range_high": "Máxima da faixa 20 candles 1H",
+            "range_midpoint": "Equilíbrio 50% da faixa",
+            "range_low": "Mínima da faixa 20 candles 1H",
+        }
+        lines = ["=== CONTEXTO DE DERIVATIVOS E REGIME (dados reais quando disponíveis) ==="]
+        for key, label in labels.items():
+            value = context.get(key)
+            if isinstance(value, float):
+                value = f"{value:.6f}"
+            lines.append(f"{label}: {value if value is not None else 'N/D'}")
+        notes = context.get("data_notes") or []
+        if notes:
+            lines.append("Limitações: " + "; ".join(str(n) for n in notes[:5]))
+        lines.append("Não inventar valores ausentes. OI/LSR/Funding são contexto, não direção garantida; Killzones são janelas de referência, não sinais por si só.")
+        return "\n".join(lines)
+
     def _analyze(self, *, run: dict[str, Any], settings: dict[str, Any], prompts: dict[str, Any],
                  datasets: dict[str, list[Candle]], symbol: str,
                  mark: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -134,19 +166,47 @@ class ApexEngine:
 
         timezone_name = safe_timezone_name(settings.get("timezone"))
         text_data = candles_to_text(datasets, symbol=symbol, timezone_name=timezone_name, rows_per_tf=60)
-        image_prompt = load_prompt(
-            prompts.get("custom_chart_img_prompt"), "default-chart-img.md"
+        prompt_profile = str(settings.get("prompt_profile", "standard")).lower()
+        if prompt_profile == "momentum_protection":
+            image_prompt = load_prompt(None, "momentum-protection-chart-img.md")
+            text_prompt = load_prompt(None, "momentum-protection-text.md")
+        else:
+            image_prompt = load_prompt(prompts.get("custom_chart_img_prompt"), "default-chart-img.md")
+            text_prompt = load_prompt(prompts.get("custom_text_prompt"), "default-text.md")
+
+        # Universal response guard also applies to user-customized prompts.
+        score_guard = (
+            "\n\nREGRA OBRIGATÓRIA APEX_TABLE: score deve ser número JSON entre 0 e 10 inclusive. "
+            "Nunca emita score acima de 10 ou abaixo de 0; use 0 para NO_TRADE. "
+            "Não adicione campos nem altere o formato JSON exigido."
         )
-        text_prompt = load_prompt(
-            prompts.get("custom_text_prompt"), "default-text.md"
+        image_prompt += score_guard
+        text_prompt += score_guard
+
+        # Advanced derivatives context is best-effort: a missing OI/LSR endpoint must
+        # never block an otherwise valid analysis. Text charts and image prompts both receive it.
+        try:
+            market_context = self.market.advanced_market_context(
+                symbol, datasets.get("1H", []), reference_time=datetime.now(timezone.utc))
+        except Exception as context_exc:
+            market_context = {"data_notes": [f"Contexto derivativo indisponível ({type(context_exc).__name__})"]}
+        formatted_market_context = self._format_market_context(market_context)
+        text_data += "\n\n" + formatted_market_context
+        # In Chart IMG mode the model receives images rather than the text chart.
+        # Explicitly attach the same measured derivatives/session context to the visual
+        # prompt so OI, Funding, LSR, ATR, Killzones and Premium/Discount are not merely
+        # mentioned in instructions without their actual values.
+        image_prompt += (
+            "\n\nCONTEXTO DERIVATIVO E DE SESSÃO — DADOS MEDIDOS:\n"
+            + formatted_market_context
+            + "\nUse os dados acima junto às cinco imagens. Se algum campo for N/D, não invente."
         )
 
         provider_strategy = str(settings.get("ai_provider_strategy", "auto")).lower()
         fixed_provider = str(settings.get("fixed_ai_provider", "gemini")).lower()
-        # Groq's configured fallback model is text-only in this project. In fixed mode,
-        # select the matching text graph/prompt rather than falsely labeling images as used.
-        fixed_text_only = provider_strategy == "fixed" and fixed_provider == "groq"
-        actual_mode = "text" if fixed_text_only else requested_mode
+        if provider_strategy == "fixed" and fixed_provider not in {"gemini", "openrouter"}:
+            raise RuntimeError("O provedor fixo deve ser Gemini ou OpenRouter. Groq é reservado para saúde e relatórios.")
+        actual_mode = requested_mode
         images: list[dict[str, Any]] = []
         chart_metadata: list[dict[str, Any]] = []
         chart_error: str | None = None
@@ -189,7 +249,7 @@ class ApexEngine:
         if provider_strategy == "fixed":
             provider = fixed_provider
             model = str(settings.get("fixed_ai_model") or settings.get(f"{provider}_model") or "").strip()
-            attempt_mode = "text" if provider == "groq" else actual_mode
+            attempt_mode = actual_mode
             attempt_images = images if attempt_mode == "chart_img" else []
             attempt_text = None if attempt_images else text_data
             if provider == "gemini":
@@ -200,10 +260,6 @@ class ApexEngine:
                 if not self.config.openrouter_api_key:
                     raise RuntimeError("OPENROUTER_API_KEY ausente para o provedor fixo")
                 client = OpenRouterClient(self.config.openrouter_api_key, model or "openrouter/free", self.config.openrouter_api_base)
-            elif provider == "groq":
-                if not self.config.groq_api_key:
-                    raise RuntimeError("GROQ_API_KEY ausente para o provedor fixo")
-                client = GroqAnalysisClient(self.config.groq_api_key, model or "openai/gpt-oss-120b", self.config.groq_api_base)
             else:
                 raise RuntimeError(f"Provedor fixo inválido: {provider}")
             attempts.append((provider.upper(), getattr(client, "model", model), client,
@@ -231,20 +287,32 @@ class ApexEngine:
                 if images:
                     client_text = OpenRouterClient(self.config.openrouter_api_key, model, self.config.openrouter_api_base)
                     attempts.append(("OPENROUTER", model, client_text, [], text_data, "text", text_prompt))
-            if self.config.groq_api_key:
-                model = str(settings.get("groq_model", "openai/gpt-oss-120b"))
-                client = GroqAnalysisClient(self.config.groq_api_key, model, self.config.groq_api_base)
-                attempts.append(("GROQ", model, client, [], text_data, "text", text_prompt))
 
         if not attempts:
-            raise RuntimeError("Nenhum provedor de IA está configurado. Configure Gemini, OpenRouter ou Groq.")
+            raise RuntimeError("Nenhum provedor de análise configurado. Configure Gemini e/ou OpenRouter. Groq não participa da estratégia de análise.")
 
         errors: list[str] = []
         for provider, model, client, attempt_images, attempt_text, attempt_mode, attempt_prompt in attempts:
             try:
-                result = client.analyze(attempt_prompt, text_data=attempt_text, images=attempt_images)
+                result = None
+                retry_count = 5 if provider == "GEMINI" else 1
+                for retry_index in range(retry_count):
+                    try:
+                        result = client.analyze(attempt_prompt, text_data=attempt_text, images=attempt_images)
+                        break
+                    except Exception as provider_exc:
+                        if provider == "GEMINI" and is_gemini_high_demand_error(provider_exc) and retry_index < retry_count - 1:
+                            self.db.log("WARN", "ai_retry",
+                                f"Gemini sobrecarregado; nova tentativa {retry_index + 2}/{retry_count} em 120 segundos",
+                                run_id=run["id"], details={"model": model, "attempt": retry_index + 1})
+                            time.sleep(120)
+                            continue
+                        raise
+                if result is None:
+                    raise RuntimeError(f"{provider} não retornou resultado após as tentativas")
                 model_used = str(result.get("model") or model)
-                data = validate_apex_table(extract_json_object(result["text"]))
+                min_tp1_rr = 0.65 if prompt_profile == "momentum_protection" else 1.2
+                data = validate_apex_table(extract_json_object(result["text"]), minimum_tp1_rr=min_tp1_rr)
                 for item in chart_metadata:
                     item["used_for_analysis"] = bool(attempt_images)
                 self._record_ai_attempt(
@@ -324,6 +392,9 @@ class ApexEngine:
         settings.setdefault("ai_provider_strategy", "auto")
         settings.setdefault("fixed_ai_provider", "gemini")
         settings.setdefault("openrouter_model", "openrouter/free")
+        settings.setdefault("ai_auto_analysis_enabled", True)
+        settings.setdefault("prompt_profile", "standard")
+        settings.setdefault("profit_stop_buffer_bps", 5.0)
         return settings
 
     def _daily_loss_guard(self, settings: dict[str, Any]) -> tuple[bool, float, float]:
@@ -339,7 +410,9 @@ class ApexEngine:
         }, limit=2000)
         today_pnl = sum(
             float(row.get("amount", 0) or 0) for row in ledger
-            if row.get("event_type") not in {"INITIAL_BALANCE", "RESET"}
+            # Deposits/administrative adjustments change cash balance but are not
+            # trading performance and must not offset the daily loss guard.
+            if row.get("event_type") not in {"INITIAL_BALANCE", "RESET", "MANUAL_ADJUSTMENT"}
         )
         max_loss_pct = float(settings.get("max_daily_loss_pct", 6.0))
         loss_limit = float(account.get("initial_balance", 20)) * max_loss_pct / 100.0
@@ -411,12 +484,35 @@ class ApexEngine:
             if check_groq:
                 self._health_check_groq(settings, snapshot, run["id"])
             return
+        if not bool(settings.get("ai_auto_analysis_enabled", True)):
+            message = (f"🔎 APEXPRIME — OPORTUNIDADE DETECTADA (IA AUTOMÁTICA DESLIGADA)\n"
+                       f"{trigger_signal.direction} BTCUSDT · score {trigger_signal.score}/3\n"
+                       f"{trigger_signal.reason}\nNenhuma imagem/texto foi enviado às APIs de análise.\nMODO: SIMULAÇÃO")
+            self._update_run(run["id"], {"status": "skipped", "market_snapshot": snapshot,
+                "finished_at": iso_utc(), "error_code": "AI_AUTOMATION_DISABLED",
+                "error_message": "Oportunidade registrada; análise automática por IA desativada."})
+            self.db.log("INFO", "strategy", "Oportunidade registrada sem chamar Gemini/OpenRouter: IA automática desligada",
+                        run_id=run["id"], details=trigger)
+            self.telegram.send(message)
+            if check_groq:
+                self._health_check_groq(settings, snapshot, run["id"])
+            return
         self._run_analysis(run=run, settings=settings, prompts=prompts,
                            datasets=None, trigger=trigger, source="hourly_scan",
                            check_groq=check_groq)
 
     def run_manual_analysis(self) -> dict[str, Any]:
         settings = self.db.settings()
+        if not bool(settings.get("ai_auto_analysis_enabled", True)):
+            # Global AI API switch: this also blocks the explicit force-analysis button.
+            # Manual external APEX_TABLE imports, Groq health/reviews and Telegram alerts
+            # remain available because they do not submit automatic charts to Gemini/OR.
+            message = ("⏸️ APEXPRIME — ANÁLISE POR API DESLIGADA\n"
+                       "A solicitação foi registrada, mas nenhum gráfico/texto foi enviado a Gemini ou OpenRouter.\n"
+                       "Colagem de análise externa, detector, Groq operacional e trades já abertos continuam ativos.")
+            self.telegram.send(message)
+            self.db.log("INFO", "analysis", "Análise forçada ignorada: chave global de IA automática desligada")
+            return {"run_id": None, "status": "skipped", "reason": "AI_AUTOMATION_DISABLED"}
         prompts = self.db.prompts()
         settings["max_entry_deviation_pct"] = self.config.max_entry_deviation_pct
         settings["pending_entry_expiry_hours"] = self.config.pending_entry_expiry_hours
@@ -709,6 +805,13 @@ class ApexEngine:
                 datasets, symbol=trade["symbol"], timezone_name="America/Sao_Paulo",
                 rows_per_tf=120, reference_time=closed,
             )
+            try:
+                review_context = self.market.advanced_market_context(
+                    trade["symbol"], datasets.get("1H", []), reference_time=closed)
+                exit_text += "\n\n" + self._format_market_context(review_context)
+            except Exception:
+                # Review text remains usable even when auxiliary futures endpoints are unavailable.
+                exit_text += "\n\nContexto OI/LSR/Funding/ATR: parcialmente indisponível."
         except Exception as exc:
             exit_text = (
                 "Não foi possível recuperar parte ou todo o histórico de candles entre a entrada e a saída. "
@@ -727,22 +830,18 @@ class ApexEngine:
                     self.config.groq_api_key, self.db.settings().get("groq_model", "openai/gpt-oss-120b"),
                     self.config.groq_api_base,
                 )
-                result = groq.review_trade({
-                    "trade": {k: trade.get(k) for k in (
-                        "symbol", "direction", "entry_type", "entry_price", "initial_stop_loss",
-                        "current_stop_loss", "tp1_price", "tp2_price", "exit_price", "close_reason",
-                        "result_category", "initial_quantity", "leverage", "risk_pct", "tp1_hit",
-                        "break_even_moved", "realized_pnl_gross", "realized_pnl_net", "entry_fee",
-                        "exit_fees", "funding_paid", "opened_at", "closed_at",
-                    )},
-                    "analysis_provider": trade.get("analysis_provider"),
-                    "analysis_model": trade.get("analysis_model"),
-                    "analysis_mode": trade.get("analysis_mode"),
-                    "analysis_source": trade.get("analysis_source"),
-                    "original_ai_response": trade.get("analysis_raw_response"),
-                    "market_text_from_entry": trade.get("entry_text_snapshot"),
-                    "market_text_from_entry_until_exit": exit_text,
-                })
+                recent_events = self.db.select("trade_events", {"trade_id": f"eq.{trade_id}"},
+                                                order="created_at.asc", limit=30)
+                compact = {
+                    k: trade.get(k) for k in (
+                        "symbol", "direction", "entry_price", "exit_price", "close_reason",
+                        "result_category", "realized_pnl_net", "entry_fee", "exit_fees",
+                        "funding_paid", "tp1_hit", "break_even_moved", "opened_at", "closed_at",
+                        "analysis_provider", "analysis_model", "analysis_mode", "analysis_source",
+                    )
+                }
+                compact["event_sequence"] = [e.get("event_type") for e in recent_events[-12:]]
+                result = groq.review_trade(compact)
                 review_text = result["text"]
                 review_status = "COMPLETED"
                 latency = result.get("latency_ms")
@@ -888,6 +987,12 @@ class ApexEngine:
         output = candles_to_text(datasets, symbol=symbol,
                                 timezone_name=safe_timezone_name(settings.get("timezone")),
                                 rows_per_tf=200, reference_time=reference)
+        try:
+            context = self.market.advanced_market_context(symbol, datasets.get("1H", []),
+                                                          reference_time=reference)
+            output += "\n\n" + self._format_market_context(context)
+        except Exception as context_exc:
+            output += f"\n\nContexto OI/LSR/Funding/ATR: N/D ({type(context_exc).__name__})."
         rows = self.db.insert("apex_exports", {
             "export_type": "TEXT_CHART", "status": "COMPLETED", "symbol": symbol,
             "reference_at": reference.isoformat(), "content_text": output,
@@ -943,32 +1048,45 @@ class ApexEngine:
         logs = self.db.select("apex_logs", {}, order="created_at.desc", limit=60)
         checks = self.db.select("service_checks", {}, order="checked_at.desc", limit=20)
         devices = self.db.select("apex_devices", {}, limit=3)
+        device = devices[0] if devices else {}
         snapshot = {
-            "account": {"balance": account.get("balance"), "initial_balance": account.get("initial_balance"),
-                        "realized_pnl": account.get("realized_pnl"), "total_fees": account.get("total_fees"),
-                        "total_funding": account.get("total_funding")},
-            "device": devices[0] if devices else None,
+            "account": {k: account.get(k) for k in ("balance", "initial_balance", "realized_pnl", "total_fees", "total_funding")},
+            "device": {k: device.get(k) for k in ("device_name", "battery_percentage", "is_charging", "battery_temperature_c", "wifi_connected", "wifi_rssi_dbm", "last_seen_at")},
             "recent_trades": [{k: t.get(k) for k in ("direction", "status", "analysis_provider", "analysis_model",
-                "analysis_mode", "analysis_source", "entry_price", "exit_price", "realized_pnl_net",
-                "result_category", "close_reason", "opened_at", "closed_at")} for t in trades],
+                "realized_pnl_net", "result_category", "close_reason", "opened_at", "closed_at")} for t in trades[:4]],
             "recent_runs": [{k: r.get(k) for k in ("status", "source", "analysis_provider", "analysis_model",
-                "analysis_mode", "signal", "error_message", "created_at")} for r in runs],
-            "recent_logs": [{k: l.get(k) for k in ("level", "component", "message", "created_at")} for l in logs],
-            "service_checks": [{k: c.get(k) for k in ("service", "status", "message", "checked_at")} for c in checks],
-            "settings": {k: settings.get(k) for k in ("analysis_mode", "ai_provider_strategy", "fixed_ai_provider",
-                "groq_health_interval_hours", "risk_per_trade_pct", "max_leverage", "max_daily_loss_pct")},
+                "analysis_mode", "signal", "created_at")} for r in runs[:4]],
+            "recent_logs": [{k: (str(l.get(k))[:90] if k == "message" else l.get(k)) for k in ("level", "component", "message", "created_at")} for l in logs[:6]],
+            "service_checks": [{k: (str(c.get(k))[:70] if k == "message" else c.get(k)) for k in ("service", "status", "message", "checked_at")} for c in checks[:6]],
+            "settings": {k: settings.get(k) for k in ("analysis_mode", "ai_auto_analysis_enabled", "ai_provider_strategy",
+                "fixed_ai_provider", "groq_health_interval_hours", "risk_per_trade_pct", "max_leverage", "max_daily_loss_pct")},
         }
         report = self.db.insert("groq_reports", {"status": "PROCESSING", "snapshot": snapshot})
         report_id = report[0]["id"] if report else None
         model = settings.get("groq_model", "openai/gpt-oss-120b")
+        # The Groq on-demand TPM budget is limited. Keep this report deliberately
+        # small and never send chart/candle tables or raw AI analysis to Groq.
+        compact_snapshot = {
+            "account": snapshot.get("account"),
+            "device": snapshot.get("device"),
+            "recent_trades": snapshot.get("recent_trades", [])[:3],
+            "recent_runs": snapshot.get("recent_runs", [])[:3],
+            "recent_logs": snapshot.get("recent_logs", [])[:4],
+            "service_checks": snapshot.get("service_checks", [])[:4],
+            "settings": snapshot.get("settings"),
+        }
+        import json
+        compact_json = json.dumps(compact_snapshot, ensure_ascii=False, separators=(",", ":"))[:4200]
         prompt = (
-            "Gere um relatório operacional objetivo em português para o ApexPrime. Descreva o que ocorreu por último, "
-            "se o worker e Redmi parecem saudáveis, resultados recentes, desempenho geral dos trades, distribuição "
-            "por provedor/modelo, falhas de serviços, riscos e próximos pontos a acompanhar. Não recomende trades, "
-            "não invente valores e diferencie dados ausentes de problemas. Dados:\\n" + str(snapshot)[:20000]
+            "Resuma em português, em até 90 palavras, o estado operacional recente do ApexPrime. "
+            "Informe o que ocorreu por último, saúde do Redmi, trades recentes, falhas importantes e uma ação prática. "
+            "Não explique causas de mercado, não recomende entradas, não invente dados e não repita o JSON inteiro. "
+            "Dados compactos: " + compact_json
         )
         try:
-            result = GroqAnalysisClient(self.config.groq_api_key, model, self.config.groq_api_base).analyze(prompt)
+            result = GroqAnalysisClient(self.config.groq_api_key, model, self.config.groq_api_base).analyze(
+                prompt, max_tokens=450
+            )
             self.db.update("groq_reports", {"id": f"eq.{report_id}"}, {
                 "status": "COMPLETED", "report_text": result["text"], "completed_at": iso_utc(),
             })

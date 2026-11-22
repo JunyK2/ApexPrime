@@ -609,6 +609,50 @@ class PaperExecutor:
                         metadata={"funding_time_ms": funding_ms, "funding_rate": rate})
         return trade, account
 
+    @staticmethod
+    def fee_covered_protective_stop(trade: dict[str, Any], settings: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+        """Estimate a stop beyond entry covering paid costs and the expected taker exit fee.
+
+        This is a paper-model estimate; gaps, slippage, future funding and rate changes can
+        still cause a realized net loss.
+        """
+        entry = float(trade["entry_price"])
+        quantity = max(0.0, float(trade.get("remaining_quantity", 0) or 0))
+        if quantity <= 0 or entry <= 0:
+            raise ValueError("Quantidade restante ou entrada inválida para proteção do stop")
+        taker_fee = max(0.0, float(settings.get("taker_fee_rate", 0.0005)))
+        entry_fee = max(0.0, float(trade.get("entry_fee", 0) or 0))
+        exit_fees = max(0.0, float(trade.get("exit_fees", 0) or 0))
+        funding_paid = float(trade.get("funding_paid", 0) or 0)
+        realized_gross = float(trade.get("realized_pnl_gross", 0) or 0)
+        buffer_bps = max(0.0, min(100.0, float(settings.get("profit_stop_buffer_bps", 5.0))))
+        cash_buffer = entry * quantity * buffer_bps / 10000.0
+        required = entry_fee + exit_fees + funding_paid - realized_gross + cash_buffer
+        if trade["direction"] == "LONG":
+            protected = (entry + required / quantity) / max(1e-12, (1.0 - taker_fee))
+            protected += entry * 1e-8
+            within_target = protected < float(trade["tp1_price"])
+            valid_direction = protected > entry
+        else:
+            protected = (entry - required / quantity) / (1.0 + taker_fee)
+            protected -= entry * 1e-8
+            within_target = protected > float(trade["tp1_price"])
+            valid_direction = protected < entry
+        metadata = {
+            "entry_fee_remaining_basis": entry_fee,
+            "exit_fees_recorded": exit_fees,
+            "funding_paid": funding_paid,
+            "realized_pnl_gross": realized_gross,
+            "expected_future_taker_fee_rate": taker_fee,
+            "buffer_bps": buffer_bps,
+            "required_net_buffer_usdt": cash_buffer,
+            "fee_covered": bool(valid_direction and within_target),
+        }
+        if not (valid_direction and within_target and protected > 0):
+            metadata["reason"] = "Ainda não há movimento suficiente para cobrir custos antes do TP1."
+            return entry, metadata
+        return protected, metadata
+
     def monitor_open_trades(self, settings: dict[str, Any]) -> None:
         trades = self.db.select("trades", {"status": "eq.OPEN"}, order="opened_at.asc")
         for original in trades:
@@ -646,22 +690,52 @@ class PaperExecutor:
                         self._close_all(trade, stop, "STOP_LOSS", settings, account, "STOP_LOSS")
                         break
 
-                    be_already = bool(trade.get("break_even_moved"))
+                    net_protected = bool(trade.get("protective_stop_net_covered", False))
                     one_r = entry + risk if direction == "LONG" else entry - risk
                     hit_one_r = candle.high >= one_r if direction == "LONG" else candle.low <= one_r
-                    if not be_already and hit_one_r:
+                    favourable_extreme = candle.high if direction == "LONG" else candle.low
+                    last_attempt_r = float(trade.get("protective_stop_last_attempt_r", 0) or 0)
+                    favourable_r = ((favourable_extreme - entry) / risk if direction == "LONG"
+                                    else (entry - favourable_extreme) / risk) if risk > 0 else 0
+                    # If 1R is reached but fees/funding cannot yet be covered before TP1,
+                    # keep a stop at entry as a defensive fallback and retry only after
+                    # a further 0.25R of favourable progress (avoids a DB/log write every minute).
+                    should_attempt_protection = (
+                        not net_protected and hit_one_r and
+                        (last_attempt_r <= 0 or favourable_r >= last_attempt_r + 0.25)
+                    )
+                    if should_attempt_protection:
+                        protected_stop, protection = self.fee_covered_protective_stop(trade, settings)
+                        fee_covered = bool(protection.get("fee_covered"))
                         self.db.update("trades", {"id": f"eq.{trade['id']}"}, {
-                            "current_stop_loss": entry, "break_even_moved": True,
+                            "current_stop_loss": protected_stop,
+                            "break_even_moved": True,
+                            "protective_stop_net_covered": fee_covered,
+                            "protective_stop_last_attempt_r": max(favourable_r, 1.0),
                         })
-                        self._event(trade["id"], "STOP_TO_BREAKEVEN", price=entry,
-                                    metadata={"trigger": "1R"})
-                        trade["current_stop_loss"] = entry
+                        self._event(trade["id"], "STOP_TO_BREAKEVEN", price=protected_stop,
+                                    metadata={"trigger": "1R", "classification": "FEE_AWARE_PROTECTIVE_STOP",
+                                              "favourable_r": favourable_r, **protection})
+                        trade["current_stop_loss"] = protected_stop
                         trade["break_even_moved"] = True
-                        # If same candle also revisits entry, treat as BE stop.
-                        be_hit = candle.low <= entry if direction == "LONG" else candle.high >= entry
-                        if be_hit:
+                        trade["protective_stop_net_covered"] = fee_covered
+                        trade["protective_stop_last_attempt_r"] = max(favourable_r, 1.0)
+                        if protection.get("fee_covered"):
+                            self.notify(
+                                f"🛡️ APEXPRIME — STOP PROTEGIDO ACIMA DO CUSTO\n"
+                                f"{direction} {trade['symbol']}\nEntrada: {entry:.2f}\n"
+                                f"Novo stop: {protected_stop:.2f}\n"
+                                f"Buffer estimado: {protection.get('buffer_bps', 0):.1f} bps\nMODO: SIMULAÇÃO"
+                            )
+                        else:
+                            self.db.log("INFO", "execution", "Stop defensivo na entrada: ainda não há espaço para cobrir custos antes do TP1; nova tentativa após +0,25R",
+                                        details={"trade_id": trade["id"], "favourable_r": favourable_r, **protection})
+                        # Conservative OHLC handling: if the same candle also crosses the
+                        # newly protected stop, exit at that stop because intrabar order is unknown.
+                        protected_hit = candle.low <= protected_stop if direction == "LONG" else candle.high >= protected_stop
+                        if protected_hit:
                             account = self._account()
-                            self._close_all(trade, entry, "STOP_LOSS", settings, account, "STOP_LOSS")
+                            self._close_all(trade, protected_stop, "STOP_LOSS", settings, account, "STOP_LOSS")
                             break
 
                     tp1_hit_now = candle.high >= tp1 if direction == "LONG" else candle.low <= tp1
@@ -670,7 +744,43 @@ class PaperExecutor:
                         account = self._account()
                         trade, account = self._partial_close(trade, tp1, qty, settings,
                                                              "TP1_PARTIAL", account, fee_type="MAKER")
-                        self.notify(f"🟡 APEXPRIME — TP1 atingido\n{trade['direction']} {trade['symbol']}\n50% fechado em {tp1:.2f}; stop protegido em breakeven.\nMODO: SIMULAÇÃO")
+
+                        # Once the first half is realized, recalculate the protective stop
+                        # using the actual fees, funding and gross PnL booked so far. This
+                        # often allows the remaining half to move beyond nominal entry.
+                        try:
+                            cost_stop, cost_meta = self.fee_covered_protective_stop(trade, settings)
+                            previous_stop = float(trade.get("current_stop_loss", entry))
+                            if direction == "LONG":
+                                next_stop = max(previous_stop, cost_stop)
+                            else:
+                                next_stop = min(previous_stop, cost_stop)
+                            fee_covered = bool(cost_meta.get("fee_covered"))
+                            self.db.update("trades", {"id": f"eq.{trade['id']}"}, {
+                                "current_stop_loss": next_stop,
+                                "break_even_moved": True,
+                                "protective_stop_net_covered": fee_covered,
+                            })
+                            self._event(trade["id"], "STOP_AFTER_TP1", price=next_stop,
+                                        metadata={"trigger": "TP1_PARTIAL",
+                                                  "classification": "FEE_AWARE_PROTECTIVE_STOP",
+                                                  **cost_meta})
+                            trade["current_stop_loss"] = next_stop
+                            trade["break_even_moved"] = True
+                            trade["protective_stop_net_covered"] = fee_covered
+                            # OHLC ambiguity is handled conservatively: if the same candle
+                            # also crossed the newly raised stop, close the remaining half.
+                            raised_stop_hit = (candle.low <= next_stop if direction == "LONG"
+                                               else candle.high >= next_stop)
+                            if raised_stop_hit:
+                                self._close_all(trade, next_stop, "STOP_LOSS", settings,
+                                                self._account(), "STOP_LOSS")
+                                break
+                        except Exception as protect_exc:
+                            self.db.log("WARN", "execution", "TP1 executado, mas o stop fee-aware não pôde ser recalculado",
+                                        details={"trade_id": trade["id"], "error_type": type(protect_exc).__name__})
+                        stop_label = "cobre custos estimados" if trade.get("protective_stop_net_covered") else "defesa na entrada (custos ainda podem restar)"
+                        self.notify(f"🟡 APEXPRIME — TP1 ATINGIDO\n{trade['direction']} {trade['symbol']}\n50% fechado em {tp1:.2f}.\nStop do restante: {float(trade.get('current_stop_loss', entry)):.2f} · {stop_label}.\nMODO: SIMULAÇÃO")
 
                     if bool(trade.get("tp1_hit")):
                         tp2_hit_now = candle.high >= tp2 if direction == "LONG" else candle.low <= tp2
