@@ -8,3 +8,34 @@
 
 .market-strip{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 19px;margin:0 0 12px;background:linear-gradient(115deg,#0b1513,#0b0e12 60%);border-color:#20392f}.market-strip>div{display:flex;flex-direction:column;gap:5px}.market-strip span{font-size:8px;letter-spacing:1.3px;font-weight:800;color:var(--muted)}.market-strip strong{font-size:22px;letter-spacing:-.7px}.market-strip small{font-size:9px;color:var(--muted)}.market-meta{text-align:right;align-items:flex-end}.market-meta strong{font-size:15px}
 @media(max-width:600px){.market-strip{padding:13px;gap:10px}.market-strip strong{font-size:17px}.market-meta strong{font-size:13px}}
+
+/* Mobile UX: remove the default blue Android/WebView tap flash without removing keyboard focus. */
+html, body, *, *::before, *::after { -webkit-tap-highlight-color: transparent; }
+button, a, select, input, textarea, [role="button"] { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #49d49a; outline-offset: 2px; }
+button, a { touch-action: manipulation; }
+.chart-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:14px; }
+.chart-card { padding:15px; min-width:0; overflow:hidden; }
+.chart-card canvas { display:block; width:100%; max-width:100%; }
+.chart-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.chart-card-head h3 { margin:4px 0 0; font-size:13px; }
+.chart-card-head strong { font-size:11px; text-align:right; }
+.subtle { color:var(--muted); font-size:10px; line-height:1.5; }
+.chart-legend { display:flex; flex-wrap:wrap; gap:10px; margin:9px 0; color:var(--muted); font-size:9px; }
+.chart-legend span { display:flex; align-items:center; gap:5px; }
+.chart-legend i { width:12px; height:3px; display:inline-block; border-radius:2px; }
+.legend-entry { background:#e8b75e; } .legend-stop { background:#f07878; } .legend-tp1 { background:#5fb5ea; } .legend-tp2 { background:#49d49a; } .legend-mark { background:#d7e1e8; }
+.export-row { padding:12px; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.export-row strong { display:block; font-size:11px; } .export-row small { display:block; margin-top:4px; color:var(--muted); font-size:9px; }
+.export-links { display:flex; flex-wrap:wrap; gap:7px; }
+.export-image-link { color:var(--green); font-size:10px; text-decoration:none; padding:7px; background:#0b1712; border:1px solid #244132; border-radius:8px; }
+.trade-attribution { overflow-wrap:anywhere; }
+.metric-select { margin-top:8px; width:100%; min-width:0; font-size:10px; }
+.report-view { max-height:65vh; }
+@media(max-width:600px) { .chart-grid { grid-template-columns:1fr; } .export-row { align-items:flex-start; flex-direction:column; } }
+
+.export-image-action { display:flex; align-items:center; gap:5px; }
+button.tiny { padding:6px 8px; font-size:9px; }
+
+/* Avoid Android/Chrome blue tap focus square while preserving keyboard focus. */
+button:focus:not(:focus-visible), a:focus:not(:focus-visible), [role=button]:focus:not(:focus-visible) { outline: none; box-shadow: none; }

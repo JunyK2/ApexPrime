@@ -56,7 +56,7 @@
         <div class="metric-grid four">
           <article class="card stat-card"><span>SALDO VIRTUAL</span><strong id="balance-value">— USDT</strong><small id="balance-sub">Saldo inicial: —</small></article>
           <article class="card stat-card"><span>PnL DE HOJE</span><strong id="today-pnl">— USDT</strong><small>Movimentações realizadas no dia</small></article>
-          <article class="card stat-card"><span>TAXA DE ACERTO</span><strong id="win-rate">—%</strong><small id="win-rate-sub">Sem operações encerradas</small></article>
+          <article class="card stat-card"><span>TAXA DE ACERTO</span><strong id="win-rate">—%</strong><small id="win-rate-sub">Sem operações encerradas</small><small id="win-rate-general">Geral: —%</small><select id="winrate-filter" class="compact-select metric-select"><option value="ALL">Taxa geral</option><option value="GEMINI">Gemini</option><option value="OPENROUTER">OpenRouter</option><option value="GROQ">Groq</option><option value="EXTERNAL">Análise manual externa</option></select></article>
           <article class="card stat-card"><span>PNL NÃO REALIZADO</span><strong id="unrealized-pnl">— USDT</strong><small id="open-count">0 operações abertas</small></article>
         </div>
 
@@ -75,7 +75,13 @@
           <div class="device-footer"><span id="device-ip">IP local: —</span><span id="device-health">Estado do servidor: aguardando</span></div>
         </div>
 
+        <div class="chart-grid two">
+          <article class="card chart-card"><div class="chart-card-head"><div><div class="eyebrow">ENERGIA</div><h3>Bateria do Redmi</h3></div><strong id="battery-eta">Autonomia: —</strong></div><canvas id="battery-chart" height="170" aria-label="Histórico de bateria do Redmi"></canvas><small id="battery-chart-note" class="subtle">Aguardando amostras de bateria.</small></article>
+          <article class="card chart-card"><div class="chart-card-head"><div><div class="eyebrow">DETECTOR 1H</div><h3>Oportunidades identificadas</h3></div><strong id="opportunity-count">—</strong></div><canvas id="opportunity-chart" height="170" aria-label="Histórico de sinais do detector"></canvas><small id="opportunity-note" class="subtle">Pontuação do detector por candle fechado de 1H.</small></article>
+        </div>
+
         <div class="section-head"><div><div class="eyebrow">POSIÇÕES</div><h2>Operações abertas</h2></div><button class="text-button" data-open-tab="trades">Ver todas</button></div>
+        <article id="overview-trade-chart-card" class="card chart-card hidden"><div class="chart-card-head"><div><div class="eyebrow">MERCADO AO VIVO</div><h3>BTCUSDT · níveis da operação</h3></div><strong id="trade-chart-pnl">PnL estimado: —</strong></div><canvas id="open-trade-chart" height="260" aria-label="Candles BTCUSDT com entrada, stop e alvos"></canvas><div class="chart-legend"><span><i class="legend-entry"></i> Entrada</span><span><i class="legend-stop"></i> Stop</span><span><i class="legend-tp1"></i> TP1 · 50%</span><span><i class="legend-tp2"></i> TP2</span><span><i class="legend-mark"></i> Mark</span></div><small id="trade-chart-note" class="subtle"></small></article>
         <div id="overview-positions" class="stack-list"><div class="empty">Carregando operações…</div></div>
 
         <div class="section-head"><div><div class="eyebrow">SETUPS</div><h2>Entradas pendentes</h2></div></div>
@@ -85,7 +91,7 @@
         <div class="card timeline-card"><div class="timeline-legend"><span><i class="dot online"></i> Online</span><span><i class="dot offline"></i> Offline estimado</span></div><div id="timeline" class="timeline"><div class="empty">Aguardando os primeiros heartbeats do Redmi.</div></div><div class="timeline-note">Intervalos offline são estimados pela ausência de heartbeats; o instante exato da interrupção não pode ser conhecido enquanto o aparelho está desconectado.</div></div>
 
         <div class="summary-grid four">
-          <article class="card summary"><span>RESUMO GROQ</span><strong id="groq-summary">Aguardando</strong><small id="groq-time">—</small></article>
+          <article class="card summary"><span>RESUMO GROQ</span><strong id="groq-summary">Aguardando</strong><small id="groq-time">—</small><button id="groq-report-now" class="ghost small">Relatório Groq completo</button></article>
           <article class="card summary"><span>MODO DE ANÁLISE</span><strong id="analysis-mode-label">Chart IMG</strong><small id="strategy-scan-label">Scan a cada 15 min · candle 1H</small></article>
           <article class="card summary"><span>AUTOMAÇÃO</span><strong id="auto-trading-label">Ativa</strong><small id="daily-guard-label">Proteção diária: 6%</small></article>
           <article class="card summary"><span>GEMINI</span><strong id="gemini-count-overview">—</strong><small>Requisições hoje</small></article>
@@ -105,15 +111,25 @@
         <div id="trade-history" class="stack-list"><div class="empty">Ainda não há operações encerradas.</div></div>
         <div class="section-head"><div><div class="eyebrow">REPLAY</div><h2>Reprodução de eventos</h2></div></div>
         <div id="replay-panel" class="card replay-panel"><div class="empty">Selecione “Replay” em uma operação do histórico.</div></div>
+        <div class="section-head"><div><div class="eyebrow">MOVIMENTAÇÕES</div><h2>Histórico de saldo virtual</h2></div></div>
+        <div id="balance-ledger" class="table-wrap"><div class="empty">Nenhuma movimentação.</div></div>
       </section>
 
       <section id="tab-analysis" class="tab-panel hidden">
-        <div class="section-head"><div><div class="eyebrow">INTELIGÊNCIA</div><h2>Análises Gemini</h2></div><button id="force-analysis" class="primary small">Forçar análise Gemini</button></div>
+        <div class="section-head"><div><div class="eyebrow">INTELIGÊNCIA</div><h2>Análises e fallback de IA</h2></div><button id="force-analysis" class="primary small">Forçar análise IA</button></div>
         <div class="metric-grid three">
-          <article class="card stat-card"><span>REQUISIÇÕES HOJE</span><strong id="gemini-today">—</strong><small>Contagem desde meia-noite local</small></article>
-          <article class="card stat-card"><span>TOTAL RECENTE</span><strong id="gemini-total">—</strong><small>Registros totais</small></article>
-          <article class="card stat-card"><span>ÚLTIMO MODELO</span><strong id="gemini-model-latest">—</strong><small id="gemini-last-time">—</small></article>
+          <article class="card stat-card"><span>REQUISIÇÕES DE IA HOJE</span><strong id="gemini-today">—</strong><small>Gemini + OpenRouter + Groq + externas</small></article>
+          <article class="card stat-card"><span>TOTAL DE REQUISIÇÕES DE IA</span><strong id="gemini-total">—</strong><small>Histórico completo no banco</small></article>
+          <article class="card stat-card"><span>ÚLTIMA TENTATIVA DE IA</span><strong id="gemini-model-latest">—</strong><small id="gemini-last-time">—</small></article>
         </div>
+        <div class="section-head"><div><div class="eyebrow">ANÁLISE EXTERNA</div><h2>Colar análise manual</h2></div></div>
+        <article class="card form-card">
+          <p class="form-help">Cole uma resposta de IA contendo [APEX_TABLE]...[/APEX_TABLE]. O sistema valida os níveis e pedirá confirmação antes de criar uma operação virtual.</p>
+          <div class="form-grid"><label>IA/provedor de origem<input id="manual-provider" value="Externa" maxlength="60"></label><label>Modelo utilizado<input id="manual-model" value="Análise externa manual" maxlength="120"></label><label>Tipo de gráfico analisado<select id="manual-chart-type"><option value="chart_img">Chart IMG / imagens</option><option value="text" selected>Gráfico em texto</option></select></label></div>
+          <label>Resposta completa da IA<textarea id="manual-analysis-raw" rows="10" placeholder="Cole aqui a resposta completa que contém APEX_TABLE..."></textarea></label>
+          <div class="form-row"><button id="paste-manual-analysis" class="ghost" type="button">Colar Análise</button><button id="confirm-manual-analysis" class="primary" type="button">Validar e confirmar trade</button></div>
+          <div id="manual-analysis-status" class="form-message" role="status"></div>
+        </article>
         <div class="section-head"><div><div class="eyebrow">EXECUÇÕES</div><h2>Últimas análises</h2></div></div>
         <div id="analysis-history" class="stack-list"><div class="empty">Nenhuma análise registrada.</div></div>
         <div class="section-head"><div><div class="eyebrow">COMANDOS</div><h2>Fila recente</h2></div></div>
@@ -135,6 +151,17 @@
             <label>Modelo Gemini<input id="setting-gemini-model" maxlength="100" required></label>
             <label>Modelo Groq<input id="setting-groq-model" maxlength="100" required></label>
             <label>Fuso horário<input id="setting-timezone" maxlength="80" required></label>
+            <label>Estratégia de provedores<select id="setting-ai-strategy"><option value="auto">Automática · Gemini → OpenRouter → Groq</option><option value="fixed">Provedor/modelo fixo</option></select></label>
+            <label>Provedor fixo<select id="setting-fixed-provider"><option value="gemini">Gemini</option><option value="openrouter">OpenRouter</option><option value="groq">Groq</option></select></label>
+            <label>Modelo fixo<input id="setting-fixed-model" maxlength="140" placeholder="Ex.: gemini-4-hydrogen"></label>
+            <label>Modelo OpenRouter<input id="setting-openrouter-model" maxlength="140" placeholder="openrouter/free"></label>
+            <label>Verificação Groq a cada (horas)<input id="setting-groq-interval" type="number" min="1" max="48" step="1"></label>
+            <label>Notional mínimo simulado (USDT)<input id="setting-min-notional" type="number" min="1" max="100000" step="1"></label>
+            <label>Volume · multiplicador<input id="setting-volume-mult" type="number" min="1" max="5" step="0.1"></label>
+            <label>Sweep · candles anteriores<input id="setting-sweep-len" type="number" min="2" max="100" step="1"></label>
+            <label>Displacement · multiplicador<input id="setting-disp-mult" type="number" min="1" max="5" step="0.1"></label>
+            <label>Cooldown · candles<input id="setting-cooldown" type="number" min="1" max="30" step="1"></label>
+            <label>Pontuação mínima do gatilho<select id="setting-min-score"><option value="1">1 de 3 · Sensibilidade alta</option><option value="2">2 de 3 · Padrão</option><option value="3">3 de 3 · Sensibilidade baixa</option></select></label>
           </div>
           <div class="toggle-grid">
             <label class="toggle"><input id="setting-auto-trading" type="checkbox"><span>Permitir novas entradas automáticas (inclui análise forçada)</span></label>
@@ -142,26 +169,39 @@
             <label class="toggle"><input id="setting-groq" type="checkbox"><span>Ativar verificação Groq</span></label>
             <label class="toggle"><input id="setting-groq-alerts" type="checkbox"><span>Alertas Groq no Telegram</span></label>
             <label class="toggle"><input id="setting-funding" type="checkbox"><span>Calcular funding</span></label>
+            <label class="toggle"><input id="setting-minimum-size" type="checkbox"><span>Simular tamanho mínimo Binance Futures (lot size / notional)</span></label>
           </div>
           <button class="primary" type="submit">Salvar configurações</button>
           <div id="settings-message" class="form-message" role="status"></div>
           <p class="form-help">Tudo nesta edição é simulado. Pausar novas entradas não fecha posições existentes; o Redmi continua monitorando stops e alvos. Risco máximo 2% por operação, alavancagem simulada máxima 20x e limite de perda contabilizada configurável. A proteção considera resultados, taxas e funding já lançados no ledger; não inclui PnL flutuante de posições abertas.</p>
         </form>
 
-        <div class="section-head"><div><div class="eyebrow">GEMINI</div><h2>Prompts de análise</h2></div></div>
+        <div class="section-head"><div><div class="eyebrow">PROMPTS</div><h2>Prompts de análise</h2></div></div>
         <form id="prompts-form" class="card form-card">
           <label>Prompt personalizado — Chart IMG<textarea id="prompt-chart" rows="10" placeholder="Vazio = usar prompt padrão Chart IMG"></textarea></label>
+          <div class="form-row"><button id="copy-chart-prompt" class="ghost" type="button">Copiar prompt Chart IMG</button></div>
           <label>Prompt personalizado — Gráfico em Texto<textarea id="prompt-text" rows="10" placeholder="Vazio = usar prompt padrão para candles em texto"></textarea></label>
+          <div class="form-row"><button id="copy-text-prompt" class="ghost" type="button">Copiar prompt Texto</button></div>
           <div class="form-row"><button class="primary" type="submit">Salvar prompts</button><button id="reset-prompts" class="ghost" type="button">Restaurar prompts padrão</button></div>
           <div id="prompts-message" class="form-message" role="status"></div>
           <p class="form-help">Ao restaurar, os campos personalizados ficam NULL no Supabase e o motor volta a usar os arquivos padrão incluídos no projeto.</p>
         </form>
+
+        <div class="section-head"><div><div class="eyebrow">CAPITAL VIRTUAL</div><h2>Adicionar saldo</h2></div></div>
+        <form id="deposit-form" class="card form-card"><div class="form-grid"><label>Valor a adicionar (USDT)<input id="deposit-amount" type="number" min="0.01" max="100000" step="0.01" required></label><label>Descrição<input id="deposit-description" maxlength="200" value="Adição manual de saldo virtual"></label></div><button class="primary" type="submit">Adicionar saldo virtual</button><div id="deposit-message" class="form-message"></div></form>
       </section>
 
       <section id="tab-tests" class="tab-panel hidden">
         <div class="section-head"><div><div class="eyebrow">DIAGNÓSTICO</div><h2>Testes de serviços</h2></div><button id="run-tests" class="primary small">Executar testes</button></div>
         <p class="section-note">Os testes são executados pelo Redmi. Alguns enviam uma requisição aos provedores e o teste do Telegram envia uma mensagem ao canal.</p>
         <div id="service-tests" class="stack-list"><div class="empty">Aguardando testes.</div></div>
+        <div class="section-head"><div><div class="eyebrow">EXPORTAR DADOS</div><h2>Gráficos para análise externa</h2></div></div>
+        <article class="card form-card">
+          <label>Data/hora de referência (vazio = candles mais recentes)<input id="export-reference-at" type="datetime-local"></label>
+          <div class="form-row"><button id="download-text-chart" class="primary" type="button">Gerar e baixar gráfico em texto</button><button id="download-chart-images" class="ghost" type="button">Gerar imagens Chart IMG (800×600)</button></div>
+          <div id="export-status" class="form-message"></div>
+          <div id="exports-list" class="stack-list"></div>
+        </article>
         <div class="section-head"><div><div class="eyebrow">WORKER</div><h2>Comandos recentes</h2></div></div>
         <div id="test-commands" class="table-wrap"></div>
       </section>
