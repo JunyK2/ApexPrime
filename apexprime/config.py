@@ -16,9 +16,11 @@ class Config:
     chart_img_api_key: str
     telegram_bot_token: str
     telegram_chat_id: str
+    openrouter_api_key: str = ""
     binance_fapi_base: str = "https://fapi.binance.com"
     gemini_api_base: str = "https://generativelanguage.googleapis.com/v1beta"
     groq_api_base: str = "https://api.groq.com/openai/v1"
+    openrouter_api_base: str = "https://openrouter.ai/api/v1"
     chart_img_api_base: str = "https://api.chart-img.com"
     max_entry_deviation_pct: float = 0.25
     pending_entry_expiry_hours: int = 12
@@ -58,9 +60,11 @@ class Config:
             raise RuntimeError("SUPABASE_URL precisa começar com https://")
         return cls(
             **values,
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             binance_fapi_base=os.getenv("BINANCE_FAPI_BASE", "https://fapi.binance.com").rstrip("/"),
             gemini_api_base=os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta").rstrip("/"),
             groq_api_base=os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1").rstrip("/"),
+            openrouter_api_base=os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1").rstrip("/"),
             chart_img_api_base=os.getenv("CHART_IMG_API_BASE", "https://api.chart-img.com").rstrip("/"),
             max_entry_deviation_pct=float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "0.25")),
             pending_entry_expiry_hours=int(os.getenv("PENDING_ENTRY_EXPIRY_HOURS", "12")),

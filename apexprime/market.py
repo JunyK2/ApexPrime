@@ -85,6 +85,31 @@ class BinanceFutures:
     def mark_price(self, symbol: str) -> dict[str, Any]:
         return self._get("/fapi/v1/premiumIndex", {"symbol": symbol})
 
+    def exchange_filters(self, symbol: str) -> dict[str, float]:
+        """Return public Binance USDⓈ-M quantity and notional filters for a symbol."""
+        data = self._get("/fapi/v1/exchangeInfo")
+        found = next((item for item in data.get("symbols", []) if item.get("symbol") == symbol), None)
+        if not found:
+            raise RuntimeError(f"Símbolo {symbol} não encontrado em exchangeInfo")
+        filters = {item.get("filterType"): item for item in found.get("filters", [])}
+        lot = filters.get("LOT_SIZE", {})
+        market_lot = filters.get("MARKET_LOT_SIZE", {})
+        notional_filter = filters.get("MIN_NOTIONAL", {}) or filters.get("NOTIONAL", {})
+        min_qtys = [float(v) for v in (lot.get("minQty"), market_lot.get("minQty")) if v not in (None, "0", 0)]
+        steps = [float(v) for v in (lot.get("stepSize"), market_lot.get("stepSize")) if v not in (None, "0", 0)]
+        return {
+            "min_qty": max(min_qtys, default=0.0),
+            "step_size": max(steps, default=0.0),
+            "min_notional": float(notional_filter.get("notional") or notional_filter.get("minNotional") or 0),
+        }
+
+    def historical_closed_klines(self, symbol: str, interval: str, reference_time: datetime,
+                                 limit: int = 200) -> list[Candle]:
+        """Return candles closed at or before a selected historical UTC timestamp."""
+        rows = self.klines(symbol, interval, limit=limit, end_time=reference_time)
+        ref = reference_time.astimezone(timezone.utc)
+        return [c for c in rows if c.close_time <= ref]
+
     def funding_history(self, symbol: str, start_time: datetime, end_time: datetime,
                         limit: int = 1000) -> list[dict[str, Any]]:
         return self._get("/fapi/v1/fundingRate", {

@@ -237,7 +237,11 @@ class DeviceReporter:
                 "worker_status": "RUNNING",
                 "metadata": {
                     "battery_percentage": snapshot.get("battery_percentage"),
+                    "is_charging": snapshot.get("is_charging"),
+                    "battery_temperature_c": snapshot.get("battery_temperature_c"),
                     "wifi_connected": snapshot.get("wifi_connected"),
+                    "wifi_ssid": snapshot.get("wifi_ssid"),
+                    "wifi_rssi_dbm": snapshot.get("wifi_rssi_dbm"),
                     "uptime_seconds": snapshot.get("uptime_seconds"),
                 },
             })

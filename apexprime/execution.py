@@ -21,6 +21,7 @@ class PaperExecutor:
         self.db = db
         self.market = market
         self.notify = notify or (lambda _message: None)
+        self.on_trade_closed: Callable[[dict[str, Any]], Any] | None = None
 
     def _account(self) -> dict[str, Any]:
         return self.db.active_account()
@@ -51,7 +52,8 @@ class PaperExecutor:
                    settings: dict[str, Any], trigger_direction: str,
                    mark_price: float, pending_fill: bool = False,
                    opened_at: str | None = None,
-                   entry_fee_type: str | None = None) -> dict[str, Any] | None:
+                   entry_fee_type: str | None = None,
+                   attribution: dict[str, Any] | None = None) -> dict[str, Any] | None:
         if analysis.get("signal") not in ("LONG", "SHORT"):
             return None
         if analysis["signal"] != trigger_direction:
@@ -129,6 +131,47 @@ class PaperExecutor:
         except ValueError as exc:
             self.db.log("WARN", "execution", f"Trade bloqueado pelo dimensionamento: {exc}", run_id=run_id)
             return None
+
+        minimum_simulated = False
+        minimum_qty = 0.0
+        minimum_notional = 0.0
+        if bool(settings.get("simulate_exchange_minimum", True)):
+            try:
+                filters = self.market.exchange_filters(settings.get("binance_symbol", "BTCUSDT"))
+                minimum_qty = float(filters.get("min_qty", 0) or 0)
+                minimum_notional = max(
+                    float(filters.get("min_notional", 0) or 0),
+                    float(settings.get("minimum_notional_usdt", 100) or 100),
+                )
+                step_size = float(filters.get("step_size", 0) or 0)
+            except Exception as exc:
+                # A configured minimum is a conservative local fallback when exchangeInfo
+                # is temporarily unavailable. The trade remains risk-capped.
+                self.db.log("WARN", "risk", "exchangeInfo indisponível; usando mínimo notional configurado",
+                            run_id=run_id, details={"error_type": type(exc).__name__})
+                minimum_notional = float(settings.get("minimum_notional_usdt", 100) or 100)
+                step_size = 0.0
+            required_qty = max(minimum_qty, minimum_notional / entry if minimum_notional > 0 else 0.0)
+            if required_qty > size["quantity"]:
+                if step_size > 0:
+                    import math
+                    required_qty = math.ceil((required_qty - 1e-14) / step_size) * step_size
+                min_risk = required_qty * abs(entry - stop) + required_qty * entry * entry_fee_rate + required_qty * stop * taker_fee
+                min_margin = required_qty * entry / leverage
+                min_risk_pct = min_risk / balance * 100.0
+                if min_risk_pct > risk_pct + 1e-8 or min_margin > available_margin + 1e-8:
+                    self.db.log("WARN", "risk_guard", "Entrada bloqueada: tamanho mínimo Binance excederia o risco de 2% ou a margem disponível",
+                                run_id=run_id, details={"required_qty": required_qty, "risk_pct": min_risk_pct,
+                                                        "max_risk_pct": risk_pct, "minimum_notional": minimum_notional,
+                                                        "available_margin": available_margin, "required_margin": min_margin})
+                    return None
+                size.update({
+                    "quantity": required_qty, "notional": required_qty * entry,
+                    "margin_used": min_margin, "entry_fee": required_qty * entry * entry_fee_rate,
+                    "risk_amount": min_risk, "risk_pct": min_risk_pct,
+                    "minimum_quantity_applied": True,
+                })
+                minimum_simulated = True
         if size["risk_pct"] > 2.000001:
             self.db.log("ERROR", "execution", "Proteção: risco calculado ultrapassou 2%", run_id=run_id)
             return None
@@ -149,6 +192,13 @@ class PaperExecutor:
             "confidence": analysis.get("confidence"), "score": analysis.get("score"),
             "regime": analysis.get("regime"), "strategy_name": analysis.get("strategy_name"),
             "analysis_summary": analysis.get("analysis_summary"),
+            "analysis_provider": (attribution or {}).get("provider", "GEMINI"),
+            "analysis_model": (attribution or {}).get("model"),
+            "analysis_mode": (attribution or {}).get("analysis_mode"),
+            "analysis_source": (attribution or {}).get("source", "automatic"),
+            "analysis_raw_response": (attribution or {}).get("raw_response"),
+            "entry_text_snapshot": (attribution or {}).get("text_snapshot"),
+            "chart_images": (attribution or {}).get("chart_images", []),
             "entry_fee": size["entry_fee"],
             "opened_at": effective_opened_at,
             "last_market_candle_at": effective_opened_at,
@@ -167,13 +217,17 @@ class PaperExecutor:
         self._event(trade["id"], "OPENED", price=entry, quantity=size["quantity"], fee=size["entry_fee"],
                     metadata={"leverage": leverage, "margin_used": size["margin_used"],
                               "risk_pct": size["risk_pct"], "risk_budget": size["risk_budget"],
-                              "entry_fee_type": entry_fee_type, "entry_fee_rate": entry_fee_rate})
+                              "entry_fee_type": entry_fee_type, "entry_fee_rate": entry_fee_rate,
+                              "minimum_simulated": minimum_simulated,
+                              "minimum_notional": minimum_notional})
         self._event(trade["id"], "FEE_CHARGED", price=entry, quantity=size["quantity"], fee=size["entry_fee"])
         self.notify(
             f"🟢 APEXPRIME — TRADE VIRTUAL ABERTO\n{direction} {trade_row['symbol']}\n"
             f"Entrada: {entry:.2f}\nStop: {stop:.2f}\nTP1: {tp1:.2f} | TP2: {tp2:.2f}\n"
             f"Qtd: {size['quantity']:.8f} BTC | Alavancagem: {leverage}x\n"
             f"Risco estimado: {size['risk_pct']:.2f}% ({size['risk_amount']:.4f} USDT)\n"
+            f"Mínimo Binance simulado: {'sim' if minimum_simulated else 'não'}\n"
+            f"IA: {(attribution or {}).get('provider', 'GEMINI')} / {(attribution or {}).get('model', '—')}\n"
             f"Saldo após taxa de entrada: {new_balance:.4f} USDT\nMODO: SIMULAÇÃO"
         )
         self.db.log("INFO", "execution", "Trade virtual aberto", run_id=run_id,
@@ -181,7 +235,8 @@ class PaperExecutor:
         return trade
 
     def create_pending_entry(self, analysis: dict[str, Any], *, run_id: str,
-                             settings: dict[str, Any], trigger_direction: str) -> dict[str, Any] | None:
+                             settings: dict[str, Any], trigger_direction: str,
+                             attribution: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Persist a virtual pullback/confirmation setup; no order is sent to Binance."""
         if analysis.get("signal") not in {"LONG", "SHORT"} or analysis.get("entry_type") not in {"PULLBACK", "CONFIRMACAO"}:
             return None
@@ -213,6 +268,13 @@ class PaperExecutor:
             "score": analysis.get("score"), "regime": analysis.get("regime"),
             "strategy_name": analysis.get("strategy_name"),
             "analysis_summary": analysis.get("analysis_summary"),
+            "analysis_provider": (attribution or {}).get("provider", "GEMINI"),
+            "analysis_model": (attribution or {}).get("model"),
+            "analysis_mode": (attribution or {}).get("analysis_mode"),
+            "analysis_source": (attribution or {}).get("source", "automatic"),
+            "analysis_raw_response": (attribution or {}).get("raw_response"),
+            "entry_text_snapshot": (attribution or {}).get("text_snapshot"),
+            "chart_images": (attribution or {}).get("chart_images", []),
             "expires_at": expires_at, "last_checked_at": iso_utc(),
         }
         rows = self.db.insert("pending_entries", row)
@@ -336,6 +398,15 @@ class PaperExecutor:
                         analysis, run_id=pending["run_id"], settings=settings,
                         trigger_direction=pending["direction"], mark_price=fill_price,
                         pending_fill=True, opened_at=candle.close_time.isoformat(),
+                        attribution={
+                            "provider": pending.get("analysis_provider", "GEMINI"),
+                            "model": pending.get("analysis_model"),
+                            "analysis_mode": pending.get("analysis_mode"),
+                            "source": pending.get("analysis_source", "automatic"),
+                            "raw_response": pending.get("analysis_raw_response"),
+                            "text_snapshot": pending.get("entry_text_snapshot"),
+                            "chart_images": pending.get("chart_images", []),
+                        },
                     )
                     if trade:
                         self.db.update("pending_entries", {"id": f"eq.{pending['id']}", "status": "eq.PROCESSING"}, {
@@ -459,18 +530,40 @@ class PaperExecutor:
                                                  event_type, account, fee_type=fee_type)
         # Update final status after the cashflows have been posted.
         reason = reason if reason in {"TP2", "STOP_LOSS", "MANUAL", "SIGNAL_REVERSAL", "RISK_GUARD", "CANCELLED"} else "MANUAL"
+        net = float(trade.get("realized_pnl_net", 0) or 0)
+        if net > 1e-8:
+            result_category = "FULL_WIN" if reason == "TP2" else "PARTIAL_WIN"
+            result_label = "🟢 WIN" if result_category == "FULL_WIN" else "🟢 WIN PARCIAL"
+        elif net < -1e-8:
+            result_category = "LOSS"
+            result_label = "🔴 LOSS"
+        else:
+            result_category = "BREAKEVEN"
+            result_label = "🟡 BREAK EVEN"
         self.db.update("trades", {"id": f"eq.{trade['id']}"}, {
             "status": "CLOSED", "remaining_quantity": 0,
             "exit_price": price, "close_reason": reason,
+            "result_category": result_category,
+            "post_trade_review_status": "PENDING",
             "closed_at": iso_utc(),
         })
         self._event(trade["id"], event_type, price=price, quantity=quantity,
-                    metadata={"close_reason": reason})
+                    metadata={"close_reason": reason, "result_category": result_category,
+                             "realized_pnl_net": net})
         self.notify(
-            f"🔴 APEXPRIME — TRADE VIRTUAL FECHADO\n{trade['direction']} {trade['symbol']}\n"
+            f"{result_label} — APEXPRIME\n{trade['direction']} {trade['symbol']}\n"
             f"Saída: {price:.2f}\nMotivo: {reason}\n"
-            f"PnL líquido acumulado: {float(trade.get('realized_pnl_net', 0)):.4f} USDT\nMODO: SIMULAÇÃO"
+            f"PnL líquido: {net:+.4f} USDT\n"
+            f"Resultado: {'lucro completo' if result_category == 'FULL_WIN' else 'lucro parcial' if result_category == 'PARTIAL_WIN' else 'prejuízo' if result_category == 'LOSS' else 'empate'}\n"
+            f"IA: {trade.get('analysis_provider', '—')} / {trade.get('analysis_model') or '—'}\nMODO: SIMULAÇÃO"
         )
+        if self.on_trade_closed:
+            try:
+                closed_rows = self.db.select("trades", {"id": f"eq.{trade['id']}"}, limit=1)
+                self.on_trade_closed(closed_rows[0] if closed_rows else {**trade, "status": "CLOSED", "result_category": result_category})
+            except Exception as exc:
+                self.db.log("ERROR", "trade_review", "Revisão pós-trade será retomada automaticamente",
+                            details={"trade_id": trade["id"], "error_type": type(exc).__name__})
 
     def charge_funding(self, trade: dict[str, Any], settings: dict[str, Any],
                        account: dict[str, Any], mark_price: float) -> tuple[dict[str, Any], dict[str, Any]]:

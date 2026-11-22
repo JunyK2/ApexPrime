@@ -51,7 +51,7 @@ def clean_error(message: str, *secrets: str) -> str:
     for secret in secrets:
         if secret:
             text = text.replace(secret, "[REDACTED]")
-    text = re.sub(r"(?i)(key|token|authorization|api_key)[=: ]+[^\s,;]+", r"\1=[REDACTED]", text)
+    text = re.sub(r"(?i)\b(api_key|token|authorization|key)[=: ]+[^\s,;]+", r"\1=[REDACTED]", text)
     return text[:1500]
 
 
@@ -63,11 +63,20 @@ def safe_float(value: Any, default: float | None = None) -> float | None:
         return default
 
 
-def local_time_label(value: datetime, timezone_name: str) -> str:
+
+def safe_timezone_name(value: Any, default: str = "America/Sao_Paulo") -> str:
+    """Return a valid IANA timezone; corrupted DB values never crash chart generation."""
+    candidate = str(value or default).strip()
     try:
-        tz = ZoneInfo(timezone_name)
+        ZoneInfo(candidate)
+        return candidate
     except Exception:
-        tz = ZoneInfo("America/Sao_Paulo")
+        ZoneInfo(default)
+        return default
+
+
+def local_time_label(value: datetime, timezone_name: str) -> str:
+    tz = ZoneInfo(safe_timezone_name(timezone_name))
     return value.astimezone(tz).strftime("%d/%m %H:%M")
 
 

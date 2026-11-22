@@ -32,3 +32,27 @@ class TelegramNotifier:
         except ValueError:
             log.warning("Telegram retornou resposta que não é JSON")
             return False
+
+    def send_long(self, message: str, chunk_size: int = 3600) -> bool:
+        """Send long trade-review text in Telegram-safe chunks."""
+        text = str(message or "")
+        if len(text) <= chunk_size:
+            return self.send(text)
+        chunks = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= chunk_size:
+                chunks.append(remaining)
+                break
+            split_at = remaining.rfind("\n", 0, chunk_size)
+            if split_at < chunk_size // 2:
+                split_at = chunk_size
+            chunks.append(remaining[:split_at])
+            remaining = remaining[split_at:].lstrip()
+        ok = True
+        total = len(chunks)
+        for index, chunk in enumerate(chunks, 1):
+            if total > 1:
+                chunk = f"[{index}/{total}]\n" + chunk
+            ok = self.send(chunk) and ok
+        return ok

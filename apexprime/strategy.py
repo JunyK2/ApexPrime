@@ -45,7 +45,8 @@ def sma(values: list[float], end_idx: int, length: int) -> float | None:
 
 def detect_latest_trigger(candles: list[Candle], *, vol_mult: float = 1.5,
                           sweep_len: int = 16, disp_mult: float = 1.5,
-                          disp_len: int = 10, cooldown: int = 3) -> TriggerSignal:
+                          disp_len: int = 10, cooldown: int = 3,
+                          min_score: int = 2) -> TriggerSignal:
     """Port of the user's Pine v6 detector; all calculations use closed candles.
 
     As in Pine, SMA(volume, 20) and SMA(abs(body), disp_len) include the current
@@ -84,13 +85,14 @@ def detect_latest_trigger(candles: list[Candle], *, vol_mult: float = 1.5,
 
         bull_score = int(volume_explosion) + int(bull_sweep) + int(bull_disp)
         bear_score = int(volume_explosion) + int(bear_sweep) + int(bear_disp)
-        bull_trigger = bull_score >= 2
-        bear_trigger = bear_score >= 2
+        threshold = min(3, max(1, int(min_score)))
+        bull_trigger = bull_score >= threshold
+        bear_trigger = bear_score >= threshold
         bull_signal = bull_trigger and (i - last_bull_bar > cooldown)
         bear_signal = bear_trigger and (i - last_bear_bar > cooldown)
 
         direction = "NONE"
-        reason = "Sem gatilho (score inferior a 2)"
+        reason = f"Sem gatilho (score inferior a {threshold})"
         if bull_signal and bear_signal:
             direction = "NONE"
             reason = "Gatilhos LONG e SHORT simultâneos; conflito conservador"

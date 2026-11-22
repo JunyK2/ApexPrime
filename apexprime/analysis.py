@@ -12,7 +12,7 @@ import requests
 
 from .market import BinanceFutures, Candle
 from .strategy import indicators
-from .utils import local_time_label
+from .utils import local_time_label, safe_timezone_name
 
 log = logging.getLogger("apexprime.analysis")
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -35,10 +35,7 @@ def candles_to_text(datasets: dict[str, list[Candle]], *, symbol: str,
                     timezone_name: str = "America/Sao_Paulo", rows_per_tf: int = 30,
                     reference_time: datetime | None = None) -> str:
     """Render OHLCV and derived RSI/MACD tables, oldest first."""
-    try:
-        tz = ZoneInfo(timezone_name)
-    except Exception:
-        tz = ZoneInfo("America/Sao_Paulo")
+    tz = ZoneInfo(safe_timezone_name(timezone_name))
     now = reference_time or datetime.now(tz)
     sections = [
         f"APEXPRIME — DADOS TABULARES {symbol}",
@@ -94,8 +91,9 @@ class ChartImgClient:
                 "theme": "dark",
                 "style": "candle",
                 "timezone": timezone_name,
-                "width": 1400,
-                "height": 850,
+                # Chart IMG free tier is limited to 800x600. Stay within this cap.
+                "width": 800,
+                "height": 600,
                 "format": "png",
                 "studies": [
                     {"name": "Volume", "forceOverlay": False},
@@ -217,3 +215,93 @@ class GroqHealthClient:
             raise RuntimeError(f"Groq HTTP {response.status_code}: {response.text[:700]}")
         content = response.json()["choices"][0]["message"]["content"]
         return {"text": content, "latency_ms": latency}
+
+
+class OpenAICompatibleAnalysisClient:
+    """OpenAI-compatible multimodal client used for OpenRouter and Groq fallback."""
+
+    def __init__(self, api_key: str, model: str, base_url: str, provider: str, timeout: int = 150):
+        self.api_key = api_key
+        self.model = model
+        self.base = base_url.rstrip("/")
+        self.provider = provider.upper()
+        self.timeout = timeout
+        self.session = requests.Session()
+
+    def analyze(self, prompt: str, *, text_data: str | None = None,
+                images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        user_parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        if text_data:
+            user_parts.append({"type": "text", "text": "\n\nDADOS TABULARES DOS CANDLES:\n" + text_data})
+        for image in images or []:
+            encoded = base64.b64encode(image["data"]).decode("ascii")
+            user_parts.append({"type": "text", "text": f"Gráfico {image['timeframe']}"})
+            user_parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{image['mime_type']};base64,{encoded}"},
+            })
+        content: Any = user_parts if images else "\n\n".join(
+            part["text"] for part in user_parts if part.get("type") == "text"
+        )
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": (
+                    "Você é um analista técnico do ApexPrime. Analise apenas os dados enviados, "
+                    "não invente preços, e devolva obrigatoriamente um bloco [APEX_TABLE] com JSON válido. "
+                    "Quando faltarem dados, escolha NO_TRADE."
+                )},
+                {"role": "user", "content": content},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 10000,
+        }
+        started = time.monotonic()
+        response = self.session.post(
+            self.base + "/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json=body, timeout=self.timeout,
+        )
+        latency = int((time.monotonic() - started) * 1000)
+        if not response.ok:
+            raise RuntimeError(f"{self.provider} HTTP {response.status_code}: {response.text[:900]}")
+        payload = response.json()
+        choices = payload.get("choices") or []
+        if not choices:
+            raise RuntimeError(f"{self.provider} retornou resposta sem choices")
+        output = choices[0].get("message", {}).get("content", "")
+        if isinstance(output, list):
+            output = "\n".join(str(p.get("text", "")) for p in output if isinstance(p, dict))
+        output = str(output or "").strip()
+        if not output:
+            raise RuntimeError(f"{self.provider} respondeu sem texto utilizável")
+        usage = payload.get("usage") or {}
+        return {
+            "text": output, "latency_ms": latency,
+            "input_tokens": usage.get("prompt_tokens"),
+            "output_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+            "model": payload.get("model") or self.model,
+            "raw": payload,
+        }
+
+
+class OpenRouterClient(OpenAICompatibleAnalysisClient):
+    def __init__(self, api_key: str, model: str = "openrouter/free",
+                 base_url: str = "https://openrouter.ai/api/v1"):
+        super().__init__(api_key, model, base_url, "OPENROUTER")
+
+
+class GroqAnalysisClient(OpenAICompatibleAnalysisClient):
+    def __init__(self, api_key: str, model: str = "openai/gpt-oss-120b",
+                 base_url: str = "https://api.groq.com/openai/v1"):
+        super().__init__(api_key, model, base_url, "GROQ")
+
+    def review_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prompt = (
+            "Faça uma revisão pós-operação do ApexPrime. Compare a tese original, os candles entre entrada e saída, "
+            "o desfecho e os custos. Explique o que ajudou/atrapalhou, se a execução simulada seguiu o plano, "
+            "e uma melhoria observável sem recomendar alavancagem maior. Não invente dados. Responda em português, "
+            "com resumo curto e pontos objetivos.\n\nCONTEXTO:\n" + str(payload)[:24000]
+        )
+        return self.analyze(prompt)

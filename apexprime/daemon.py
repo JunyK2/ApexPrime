@@ -49,8 +49,37 @@ def run() -> int:
     last_maintenance = 0.0
     last_scan = 0.0
     last_queue = 0.0
-    last_groq = 0.0
+    last_settings_reload = now
+    last_market_snapshot = 0.0
     last_snapshot = {}
+
+    # Load the configured Groq interval and persist its cadence across daemon restarts.
+    # A crash/relaunch must not cause repeated health checks within a few minutes.
+    try:
+        initial_settings = engine._runtime_settings()
+        groq_interval_seconds = max(3600, min(48 * 3600,
+            int(initial_settings.get("groq_health_interval_hours", 4)) * 3600))
+    except Exception as exc:
+        log.warning("Usando intervalo Groq padrão de 4h até recuperar o Supabase: %s", type(exc).__name__)
+        groq_interval_seconds = 4 * 3600
+    last_groq = now
+    try:
+        previous_checks = engine.db.select("service_checks", {"service": "eq.GROQ"},
+                                           order="checked_at.desc", limit=1)
+        if previous_checks:
+            checked = datetime.fromisoformat(str(previous_checks[0]["checked_at"]).replace("Z", "+00:00"))
+            if checked.tzinfo is None:
+                checked = checked.replace(tzinfo=timezone.utc)
+            elapsed = max(0.0, (datetime.now(timezone.utc) - checked).total_seconds())
+            last_groq = now - min(elapsed, groq_interval_seconds)
+        else:
+            # First start performs one check, then respects the configured cadence.
+            last_groq = now - groq_interval_seconds
+    except Exception as exc:
+        # If Supabase is temporarily unavailable, avoid rapid retries; the next scheduled
+        # health check will also validate connectivity.
+        log.warning("Não foi possível recuperar o último horário do Groq; aguardando intervalo: %s", type(exc).__name__)
+
 
     log.info("Daemon iniciado. heartbeat=%ss telemetry=%ss maintenance=%ss scan=%ss queue=%ss",
              config.device_heartbeat_interval_seconds, config.device_telemetry_interval_seconds,
@@ -79,10 +108,19 @@ def run() -> int:
             if _next_due(last_maintenance, config.maintenance_interval_seconds, now):
                 try:
                     engine.run_maintenance()
+                    engine.process_pending_trade_reviews()
                 except Exception as exc:
                     log.exception("Falha na manutenção de posições: %s", type(exc).__name__)
                     engine.db.log("ERROR", "daemon", "Falha na manutenção de posições", details={"error_type": type(exc).__name__})
                 last_maintenance = now
+
+            # Publish mark price and recent candles for the live PWA chart.
+            if _next_due(last_market_snapshot, 60, now):
+                try:
+                    engine.publish_market_snapshot()
+                except Exception as exc:
+                    log.warning("Snapshot do gráfico indisponível: %s", type(exc).__name__)
+                last_market_snapshot = now
 
             if _next_due(last_queue, config.queue_poll_interval_seconds, now):
                 try:
@@ -103,7 +141,17 @@ def run() -> int:
                         pass
                 last_scan = now
 
-            if _next_due(last_groq, config.market_scan_interval_seconds, now):
+            if _next_due(last_settings_reload, 300, now):
+                try:
+                    latest_settings = engine._runtime_settings()
+                    groq_interval_seconds = max(3600, min(48 * 3600,
+                        int(latest_settings.get("groq_health_interval_hours", 4)) * 3600))
+                except Exception as exc:
+                    log.warning("Não foi possível atualizar intervalo Groq; mantendo %sh: %s",
+                                groq_interval_seconds // 3600, type(exc).__name__)
+                last_settings_reload = now
+
+            if _next_due(last_groq, groq_interval_seconds, now):
                 try:
                     if not last_snapshot:
                         last_snapshot = reporter.reader.collect(config.device_id, config.device_name)
