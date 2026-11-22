@@ -5,13 +5,13 @@ Nesta edição, o worker roda no Termux. Portanto, as chaves privadas do servido
 ## Configuração local
 
 1. Copie `config/.env.redmi6a.example` para `.env` na raiz do projeto.
-2. Preencha `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `CHART_IMG_API_KEY`, `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`.
+2. Preencha `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `CHART_IMG_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` e `OPENROUTER_API_KEY`. Configure também `OPENROUTER_API_BASE=https://openrouter.ai/api/v1`.
 3. Proteja o arquivo com `chmod 600 .env`.
 4. Nunca envie `.env` ao GitHub ou ao PWA.
 
 ## PWA
 
-O frontend estático só recebe `SUPABASE_URL` e `SUPABASE_ANON_KEY` em `frontend/config.js`. A chave `anon`/publishable é pública por definição e deve ser restringida por Auth + RLS. Nunca use `SUPABASE_SERVICE_ROLE_KEY` no navegador.
+O frontend estático só recebe `SUPABASE_URL` e `SUPABASE_ANON_KEY` em `frontend/config.js`. A chave `anon`/publishable é pública por definição e deve ser restringida por Auth + RLS. Nunca use `SUPABASE_SERVICE_ROLE_KEY` no navegador. A chave OpenRouter, assim como as chaves Gemini e Groq, deve existir somente no `.env` privado do Termux.
 
 ## Telegram
 

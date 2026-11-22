@@ -1,45 +1,43 @@
-# ApexPrime v1.0 — estado final do projeto
+# ApexPrime — estado da atualização IA + Dashboard
 
-Esta distribuição incorpora as partes anteriores e finaliza o PWA administrativo para o worker Redmi 6A.
+Esta edição atualiza o worker Redmi 6A, o motor de failover e o PWA administrativo.
 
 ## Banco de dados
 
-- `001_initial_schema.sql`: schema, configurações, prompts, conta virtual, trades, ledger, runs, Gemini, logs e fila.
-- `002_pending_entries.sql`: entradas virtuais PULLBACK/CONFIRMACAO e cursor independente de candles 1m.
-- `003_redmi_device_monitoring.sql`: `apex_devices`, `device_heartbeats` e `device_events`.
-- `004_dashboard_individual_actions.sql`: habilita saída individual e cancelamento individual na fila.
-- `005_automation_risk_controls.sql`: pausa de entradas e limite de perda diária.
+A instalação anterior publicada terminava em 005. Para aplicar todos os recursos desta edição, execute 006, 007 e 008, nessa ordem, depois de 001–005:
 
-Quem já executou 001–003 deve executar apenas 004 e 005.
+- `006_ai_failover_exports_and_trade_reviews.sql`: roteamento/atribuição de IA, modo automático/fixo, Groq configurável, análises externas, exports, snapshots, eventos do detector, revisão pós-trade e capital virtual inicial de 100 USDT.
+- `007_dashboard_permissions_and_indexes.sql`: grants, índices e leitura autenticada do dashboard.
+- `008_openrouter_dashboard_access.sql`: diagnóstico OPENROUTER e reforço idempotente de permissões.
 
 ## Worker Redmi
 
-- Heartbeat 60s; telemetria 5min; gestão trades/pendências 60s; fila 30s; scan mercado 15min; Groq 15min.
-- Detector TradingView usa candle 1H fechado e os três pilares do Pine.
-- Gemini Chart IMG (1D/4H/1H/15M/5M) ou candles em texto.
-- APEX_TABLE validada antes de afetar o saldo virtual.
-- PaperExecutor, sem endpoints privados de conta ou ordens Binance.
-- Limite risco 2%, alavancagem simulada 20x, TP1 parcial, breakeven, TP2, funding e taxas simuladas.
-- Entradas pendentes expiram e podem ser canceladas pelo painel.
-- Limite diário bloqueia novas entradas.
+- Heartbeat 60s; telemetria 5min; gestão de trades/pendências 60s; fila 30s; scan mercado 15min usando candle 1H.
+- Estratégia auto Gemini → OpenRouter `openrouter/free` → Groq. Se imagem não for possível, tenta texto. Se Chart IMG falhar, muda para gráfico tabular.
+- Chart IMG solicita exatamente 800×600.
+- Groq health-check padrão 4h, configurável 1–48h e com cadência recuperada do último service check no Supabase ao reiniciar o daemon.
+- Revisão Groq pós-trade separada do health-check; resultado/contexto continuam sendo enviados mesmo se Groq falhar.
+- APEX_TABLE validada; paper executor sem endpoints privados/ordens Binance.
+- Análise externa manual exige confirmação do administrador e fica identificada como EXTERNAL.
 
-## PWA final
+## PWA
 
-- Dashboard com saldo, PnL, win rate, preço BTCUSDT e último gatilho.
-- Saúde Redmi, bateria, carregamento, temperatura, Wi-Fi, RSSI, uptime, timeline.
-- Posições abertas, saída individual, fechar todas, entradas pendentes e cancelamento.
-- Histórico de trades, eventos, detalhes e replay em intervalos de aproximadamente 3 segundos.
-- Análises Gemini, APEX_TABLE, imagens armazenadas, contadores e fila de comandos.
-- Configurações de modo, prompts, risco, alavancagem, taxas, fim de semana, Groq, funding, pausa e perda diária.
-- Testes dos provedores e logs filtráveis.
+- Remove tap highlight azul no celular, mantendo foco de teclado.
+- Saldo/PnL/win rate geral e por provider; posições, histórico, atribuição IA e replay.
+- Gráfico de candles com níveis e PnL estimado por mark price.
+- Gráfico da bateria/autonomia aproximada e timeline de conectividade do Redmi.
+- Gráfico de oportunidades/sensibilidade, prompts copiáveis, colagem manual APEX_TABLE.
+- Depósito virtual auditado, export de candles históricos em texto e imagens atuais Chart IMG.
+- Relatório Groq sob demanda, configurações de provider/modelo, testes e logs.
 
 ## Segurança e limites
 
 - Exclusivamente paper trading; `PAPER_TRADING_ONLY=true`; `APEX_REAL_TRADING_ENABLED=false`.
-- O código bloqueia a inicialização se a configuração tentar ativar modo real.
-- O PWA usa apenas Supabase URL e anon/public key; o service role fica no Termux.
-- A simulação não garante fills reais nem rentabilidade.
+- O worker bloqueia a inicialização se houver tentativa de ativar execução real.
+- O PWA usa Supabase URL + anon/public key; `SUPABASE_SERVICE_ROLE_KEY` e todas as chaves de IA ficam no `.env` do Termux.
+- `openrouter/free` escolhe entre modelos gratuitos disponíveis, mas limites, disponibilidade e visão variam conforme o catálogo do serviço.
+- O PnL da tela é estimativa com mark price, não extrato real; taxas/funding e fills são aproximações.
 
-## Testes no ambiente de desenvolvimento
+## Testes automatizados
 
-Total: **30 testes aprovados**. CI verifica Python e sintaxe JS. Testes de provedores/credenciais, conectividade e inicialização MIUI precisam continuar sendo executados no próprio Redmi pelo menu Testes.
+Total: **35 testes aprovados**. CI verifica compilação Python, sintaxe JavaScript e testes unitários. Provedores, credenciais, rede e inicialização MIUI devem ser testados no Redmi no menu Diagnóstico.
